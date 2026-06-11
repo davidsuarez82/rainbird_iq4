@@ -1,0 +1,142 @@
+start_zone:
+  name: Start Zone
+  description: Start manual irrigation on a zone for a specified duration.
+  fields:
+    station_entity:
+      name: Station
+      description: The irrigation zone to start. Select a Station sensor.
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: sensor
+              device_class: enum
+    duration:
+      name: Duration
+      description: How long to run the zone in minutes (1-30).
+      required: true
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 1
+          unit_of_measurement: min
+          mode: slider
+
+stop_zone:
+  name: Stop Zone
+  description: Stop a zone that is currently running.
+  fields:
+    station_entity:
+      name: Station
+      description: The irrigation zone to stop. Select a Station sensor.
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: sensor
+              device_class: enum
+
+set_rain_delay:
+  name: Set Rain Delay
+  description: Set or clear the rain delay.
+  fields:
+    days:
+      name: Days
+      description: Number of days to delay irrigation (0 to clear).
+      required: true
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 14
+          step: 1
+          unit_of_measurement: days
+          mode: slider
+
+enable_forecast_rain_delay:
+  name: Enable Forecast Rain Delay
+  description: Enable forecast-based rain delay with the specified parameters.
+  fields:
+    percent:
+      name: Rain Probability Threshold
+      description: Minimum rain probability to trigger delay.
+      required: true
+      default: "70"
+      selector:
+        select:
+          options:
+            - "70"
+            - "80"
+            - "90"
+    rainfall:
+      name: Rainfall Threshold (inches)
+      description: Minimum rainfall in inches to trigger delay.
+      required: true
+      default: "0.25"
+      selector:
+        select:
+          options:
+            - "0.125"
+            - "0.25"
+            - "0.50"
+            - "0.75"
+    delay_days:
+      name: Delay Days
+      description: Number of days to delay when triggered.
+      required: true
+      default: "1"
+      selector:
+        select:
+          options:
+            - "1"
+            - "2"
+
+disable_forecast_rain_delay:
+  name: Disable Forecast Rain Delay
+  description: Disable forecast-based rain delay.
+
+set_weather_adjust_automatic:
+  name: Set Weather Adjust to Automatic
+  description: Enable automatic seasonal adjust for a program based on weather data.
+  fields:
+    program_entity:
+      name: Program
+      description: The irrigation program. Select a Program Status sensor.
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: sensor
+              device_class: enum
+
+set_weather_adjust_manual:
+  name: Set Weather Adjust to Manual
+  description: Set manual seasonal adjust percentage for a program.
+  fields:
+    program_entity:
+      name: Program
+      description: The irrigation program. Select a Program Status sensor.
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: sensor
+              device_class: enum
+    seasonal_adjust:
+      name: Seasonal Adjust
+      description: Manual seasonal adjust percentage (5-200). Default is 100%.
+      required: false
+      default: 100
+      selector:
+        number:
+          min: 5
+          max: 200
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider

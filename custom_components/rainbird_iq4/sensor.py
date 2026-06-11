@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
@@ -31,6 +31,7 @@ async def async_setup_entry(
     entities.append(RainBirdControllerModeSensor(coordinator))
     entities.append(RainBirdAlarmSensor(coordinator))
     entities.append(RainBirdWarningSensor(coordinator))
+    entities.append(RainBirdRainDelaySensor(coordinator))
 
     # One sensor per station
     for station in coordinator.data.get("stations", []):
@@ -54,7 +55,6 @@ class RainBirdBaseSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info — all entities share one device."""
         satellite = self.coordinator.data.get("satellite", {})
         return DeviceInfo(
             identifiers={(DOMAIN, str(self._satellite_id))},
@@ -95,8 +95,26 @@ class RainBirdWarningSensor(RainBirdBaseSensor):
         return self.coordinator.data.get("alerts", {}).get("warnings", 0)
 
 
+class RainBirdRainDelaySensor(RainBirdBaseSensor):
+    """Sensor reporting current rain delay in days."""
+
+    def __init__(self, coordinator: RainBirdCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._satellite_id}_rain_delay_sensor"
+        self._attr_name = f"{self._satellite_name} Rain Delay"
+        self._attr_icon = "mdi:weather-rainy"
+        self._attr_native_unit_of_measurement = "days"
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.data.get("connection", {}).get("rainDelayDaysRemaining", 0)
+
+
 class RainBirdStationSensor(RainBirdBaseSensor):
     """Sensor reporting the current status of a single irrigation zone."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["idle", "running", "paused"]
 
     def __init__(self, coordinator: RainBirdCoordinator, station: dict) -> None:
         super().__init__(coordinator)
@@ -136,7 +154,10 @@ class RainBirdStationSensor(RainBirdBaseSensor):
 
 
 class RainBirdProgramSensor(RainBirdBaseSensor):
-    """Sensor reporting the configuration of an irrigation program."""
+    """Sensor reporting the configuration and adjust status of an irrigation program."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["scheduled", "not scheduled", "disabled"]
 
     def __init__(self, coordinator: RainBirdCoordinator, program: dict) -> None:
         super().__init__(coordinator)
@@ -163,11 +184,13 @@ class RainBirdProgramSensor(RainBirdBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         program = self._get_program()
+        et_type = program.get("etAdjustType", 6)
         return {
-            "start_time": program.get("startTime"),
-            "week_days":  program.get("weekDays", []),
-            "adjust":     program.get("adjust"),
-            "steps":      program.get("steps"),
+            "start_time":      program.get("startTime"),
+            "week_days":       program.get("weekDays", []),
+            "steps":           program.get("steps"),
+            "weather_adjust":  "automatic" if et_type == 7 else "none",
+            "seasonal_adjust": program.get("adjustedValue"),
         }
 
 

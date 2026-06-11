@@ -29,6 +29,7 @@ async def async_setup_entry(
 
     entities = [
         RainBirdConnectionBinarySensor(coordinator),
+        RainBirdForecastBinarySensor(coordinator),
     ]
 
     # Add a binary sensor for each physical sensor (e.g. rain sensor)
@@ -50,7 +51,6 @@ class RainBirdBaseBinarySensor(CoordinatorEntity, BinarySensorEntity):
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device info — all entities share one device."""
         satellite = self.coordinator.data.get("satellite", {})
         return DeviceInfo(
             identifiers={(DOMAIN, str(self._satellite_id))},
@@ -76,6 +76,32 @@ class RainBirdConnectionBinarySensor(RainBirdBaseBinarySensor):
         return self.coordinator.data.get("connection", {}).get("isConnected", False)
 
 
+class RainBirdForecastBinarySensor(RainBirdBaseBinarySensor):
+    """Binary sensor reporting whether forecast rain delay is enabled."""
+
+    def __init__(self, coordinator: RainBirdCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._satellite_id}_forecast_enabled"
+        self._attr_name = f"{self._satellite_name} Forecast Rain Delay"
+        self._attr_device_class = BinarySensorDeviceClass.RUNNING
+        self._attr_icon = "mdi:weather-lightning-rainy"
+
+    @property
+    def is_on(self) -> bool:
+        return self.coordinator.data.get("forecast", {}).get("enabled", False)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        forecast = self.coordinator.data.get("forecast", {})
+        if not forecast.get("enabled"):
+            return {}
+        return {
+            "percent":    forecast.get("percent"),
+            "rainfall":   forecast.get("inches"),
+            "delay_days": forecast.get("delayDays"),
+        }
+
+
 class RainBirdRainSensor(RainBirdBaseBinarySensor):
     """Binary sensor reporting whether the rain sensor is triggered."""
 
@@ -95,14 +121,13 @@ class RainBirdRainSensor(RainBirdBaseBinarySensor):
 
     @property
     def is_on(self) -> bool:
-        """Return True if the sensor is triggered (blocking irrigation)."""
         return bool(self._get_sensor().get("triggered", False))
 
     @property
     def extra_state_attributes(self) -> dict:
         sensor = self._get_sensor()
         return {
-            "model":    sensor.get("model"),
-            "type":     sensor.get("typeName"),
-            "active":   sensor.get("active"),
+            "model":  sensor.get("model"),
+            "type":   sensor.get("typeName"),
+            "active": sensor.get("active"),
         }

@@ -225,9 +225,9 @@ class RainBirdAPI:
           15002 — rain delay enabled
           15011 — rain delay expired/disabled
         """
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now()
         start = (now - datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
-        end = now.strftime("%Y-%m-%dT%H:%M:%S")
+        end = (now + datetime.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
         return self._post(
             "EventLog/GetEventLogsBySatelliteIds_V2",
             json=[satellite_id],

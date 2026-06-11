@@ -45,18 +45,14 @@ def _process_event_logs(event_logs: list, stations: list) -> dict:
       - lastRun: timestamp string or None
       - lastRunCompleted: timestamp string or None
     """
-    # Map terminal → station id
     terminal_to_id = {s.get("terminal"): s.get("id") for s in stations}
-
-    # Sort events oldest first
     sorted_events = sorted(event_logs, key=lambda e: e.get("timestamp", ""))
 
-    # Track state per terminal
     station_events: dict[int, dict] = {}
     for terminal in terminal_to_id:
         station_events[terminal] = {
-            "isRunning":       False,
-            "lastRun":         None,
+            "isRunning":        False,
+            "lastRun":          None,
             "lastRunCompleted": None,
         }
 
@@ -149,10 +145,8 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                     "remaining": rs.get("remainingRunTime"),
                 }
 
-        # Process event logs — more reliable than run_status for scheduled runs
+        # Process event logs
         station_event_data = _process_event_logs(event_logs, stations)
-
-        # Map terminal → station id for event lookup
         terminal_to_id = {s.get("terminal"): s.get("id") for s in stations}
 
         # Enrich stations
@@ -162,11 +156,8 @@ class RainBirdCoordinator(DataUpdateCoordinator):
             terminal = s.get("terminal")
             live     = station_live.get(sid_key, {})
             events   = station_event_data.get(terminal, {})
-
-            # Prefer live API status, fall back to event log
             live_status = live.get("status", "-")
             is_running  = live_status == "R" or events.get("isRunning", False)
-
             stations_data.append({
                 "id":               sid_key,
                 "name":             s.get("name"),
@@ -182,16 +173,18 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         # Enrich programs
         programs_data = []
         for p in programs:
+            et_type = p.get("etAdjustType", 6)
             programs_data.append({
-                "id":           p.get("id"),
-                "name":         p.get("name"),
-                "shortName":    p.get("shortName"),
-                "isEnabled":    p.get("isEnabled"),
-                "startTime":    _parse_start_time(p.get("startTime")),
-                "weekDays":     _parse_weekdays(p.get("weekDays", "")),
-                "adjust":       p.get("programAdjust"),
-                "steps":        p.get("numberOfProgramSteps"),
-                "etAdjustType": p.get("etAdjustType"),
+                "id":               p.get("id"),
+                "name":             p.get("name"),
+                "shortName":        p.get("shortName"),
+                "isEnabled":        p.get("isEnabled"),
+                "startTime":        _parse_start_time(p.get("startTime")),
+                "weekDays":         _parse_weekdays(p.get("weekDays", "")),
+                "adjust":           p.get("programAdjust"),
+                "adjustedValue":    p.get("tempProgramAdjust") if et_type == 7 else p.get("programAdjust"),
+                "steps":            p.get("numberOfProgramSteps"),
+                "etAdjustType":     et_type,
             })
 
         return {
