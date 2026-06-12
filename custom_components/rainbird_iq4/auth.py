@@ -11,12 +11,9 @@ from urllib.parse import quote
 
 from curl_cffi import requests as cf
 
-from .const import AUTH_BASE, CLIENT_ID
+from .const import AUTH_BASE, CLIENT_ID, TOKEN_CACHE_PATH
 
 _LOGGER = logging.getLogger(__name__)
-
-# Token cache file — survives HA restarts
-TOKEN_CACHE_PATH = "/config/rainbird_iq4_token.json"
 
 
 def _decode_jwt_exp(token: str) -> int:
@@ -144,7 +141,6 @@ class RainBirdAuth:
     def get_token(self) -> str:
         """Return a valid token, refreshing if necessary.
         Runs in executor thread — disk I/O is safe here."""
-        # Load disk cache on first call
         if not self._cache_loaded:
             self._load_token_cache()
 

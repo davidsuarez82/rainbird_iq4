@@ -1,4 +1,4 @@
-"""Rain Bird IQ4 data update coordinator."""
+"""Rain Bird IQ4 data update coordinators."""
 from __future__ import annotations
 
 import logging
@@ -14,9 +14,12 @@ from .const import DOMAIN, WEEKDAY_NAMES
 _LOGGER = logging.getLogger(__name__)
 
 # Event numbers from the Rain Bird event log
-EVENT_STATION_ON       = 97    # station turning on
-EVENT_STATION_OFF      = 98    # station turning off
-EVENT_IRRIGATION_DONE  = 15000 # irrigation completed
+EVENT_STATION_ON      = 97
+EVENT_STATION_OFF     = 98
+EVENT_IRRIGATION_DONE = 15000
+
+# Number of consecutive errors before marking unavailable
+MAX_CONSECUTIVE_ERRORS = 3
 
 
 def _parse_weekdays(weekdays_str: str) -> list[str]:
@@ -37,14 +40,7 @@ def _parse_start_time(start_time_str: str | None) -> str | None:
 
 
 def _process_event_logs(event_logs: list, stations: list) -> dict:
-    """
-    Process event logs to determine station status and last run times.
-
-    Returns a dict keyed by terminal number with:
-      - isRunning: bool
-      - lastRun: timestamp string or None
-      - lastRunCompleted: timestamp string or None
-    """
+    """Process event logs to determine station status and last run times."""
     terminal_to_id = {s.get("terminal"): s.get("id") for s in stations}
     sorted_events = sorted(event_logs, key=lambda e: e.get("timestamp", ""))
 
@@ -76,10 +72,10 @@ def _process_event_logs(event_logs: list, stations: list) -> dict:
 
 class RainBirdCoordinator(DataUpdateCoordinator):
     """
-    Coordinator that fetches and caches Rain Bird IQ4 data.
+    Real-time coordinator — polls every 30s (configurable).
 
-    Polls the Rain Bird API at a configurable interval and
-    provides structured data to all platform entities.
+    Fetches: station run status via event log, connection state, alerts.
+    Tolerates up to 3 consecutive errors before marking unavailable.
     """
 
     def __init__(
@@ -91,52 +87,41 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         scan_interval: int,
     ) -> None:
         super().__init__(
-            hass,
-            _LOGGER,
-            name=DOMAIN,
+            hass, _LOGGER, name=f"{DOMAIN}_realtime",
             update_interval=timedelta(seconds=scan_interval),
         )
         self.api = api
         self.satellite_id = satellite_id
         self.company_id = company_id
+        self._consecutive_errors = 0
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch all data from Rain Bird API."""
         try:
-            return await self.hass.async_add_executor_job(self._fetch_data)
+            data = await self.hass.async_add_executor_job(self._fetch_data)
+            self._consecutive_errors = 0
+            return data
         except Exception as err:
-            raise UpdateFailed(f"Error fetching Rain Bird data: {err}") from err
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                self._consecutive_errors = 0
+                raise UpdateFailed(f"Error fetching Rain Bird data: {err}") from err
+            _LOGGER.warning(
+                "Transient error (%d/%d), keeping last known data: %s",
+                self._consecutive_errors, MAX_CONSECUTIVE_ERRORS, err
+            )
+            return self.data
 
     def _fetch_data(self) -> dict[str, Any]:
-        """Synchronous data fetch — runs in executor thread."""
         sid = self.satellite_id
         cid = self.company_id
 
-        raw        = self.api.get_satellite(sid)
-        programs   = self.api.get_program_list(sid)
-        stations   = self.api.get_station_list(sid)
-        run_status = self.api.get_run_station_status(sid)
-        assigned   = self.api.get_programs_assigned_runtime(sid)
         connected  = self.api.is_connected(sid)
         alerts     = self.api.get_company_status(cid)
-        sensors    = self.api.get_sensor_list(sid)
-        flow_zones = self.api.get_flow_elements(sid)
-        flow_mon   = self.api.get_flow_monitoring(sid)
         event_logs = self.api.get_event_logs(sid, hours=24)
+        stations   = self.api.get_station_list(sid)
+        run_status = self.api.get_run_station_status(sid)
 
-        # Map stationId → assigned runtimes
-        station_runtime: dict[int, list] = {}
-        for item in assigned:
-            sid_key = item["stationId"]
-            for prog in item.get("runtimeProgramAssignedList", []):
-                station_runtime.setdefault(sid_key, []).append({
-                    "programId":       prog.get("programId"),
-                    "programName":     prog.get("programShortName"),
-                    "baseRunTime":     prog.get("baseRunTime"),
-                    "adjustedRunTime": prog.get("adjustedRunTime"),
-                })
-
-        # Map stationId → live status from run_status endpoint
+        # Map stationId → live status
         station_live: dict[int, dict] = {}
         for prog in run_status:
             for rs in prog.get("runStationStatuses", []):
@@ -147,9 +132,7 @@ class RainBirdCoordinator(DataUpdateCoordinator):
 
         # Process event logs
         station_event_data = _process_event_logs(event_logs, stations)
-        terminal_to_id = {s.get("terminal"): s.get("id") for s in stations}
 
-        # Enrich stations
         stations_data = []
         for s in stations:
             sid_key  = s["id"]
@@ -164,28 +147,67 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                 "terminal":         terminal,
                 "status":           "R" if is_running else live_status,
                 "remaining":        live.get("remaining"),
-                "programs":         station_runtime.get(sid_key, []),
                 "isRunning":        is_running,
                 "lastRun":          events.get("lastRun"),
                 "lastRunCompleted": events.get("lastRunCompleted"),
             })
 
-        # Enrich programs
-        programs_data = []
-        for p in programs:
-            et_type = p.get("etAdjustType", 6)
-            programs_data.append({
-                "id":               p.get("id"),
-                "name":             p.get("name"),
-                "shortName":        p.get("shortName"),
-                "isEnabled":        p.get("isEnabled"),
-                "startTime":        _parse_start_time(p.get("startTime")),
-                "weekDays":         _parse_weekdays(p.get("weekDays", "")),
-                "adjust":           p.get("programAdjust"),
-                "adjustedValue":    p.get("tempProgramAdjust") if et_type == 7 else p.get("programAdjust"),
-                "steps":            p.get("numberOfProgramSteps"),
-                "etAdjustType":     et_type,
-            })
+        return {
+            "connection": {
+                "isConnected": connected,
+            },
+            "alerts": {
+                "alarms":   alerts.get("unackedAlarmCount", 0),
+                "warnings": alerts.get("unackedWarningCount", 0),
+            },
+            "stations":  stations_data,
+            "eventLogs": event_logs,
+        }
+
+
+class RainBirdConfigCoordinator(DataUpdateCoordinator):
+    """
+    Config coordinator — polls every 5 min (configurable).
+
+    Fetches: satellite info, rain delay, forecast settings, physical sensors.
+    Tolerates up to 3 consecutive errors before marking unavailable.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        api: RainBirdAPI,
+        satellite_id: int,
+        scan_interval: int,
+    ) -> None:
+        super().__init__(
+            hass, _LOGGER, name=f"{DOMAIN}_config",
+            update_interval=timedelta(seconds=scan_interval),
+        )
+        self.api = api
+        self.satellite_id = satellite_id
+        self._consecutive_errors = 0
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            data = await self.hass.async_add_executor_job(self._fetch_data)
+            self._consecutive_errors = 0
+            return data
+        except Exception as err:
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                self._consecutive_errors = 0
+                raise UpdateFailed(f"Error fetching Rain Bird config data: {err}") from err
+            _LOGGER.warning(
+                "Transient config error (%d/%d), keeping last known data: %s",
+                self._consecutive_errors, MAX_CONSECUTIVE_ERRORS, err
+            )
+            return self.data
+
+    def _fetch_data(self) -> dict[str, Any]:
+        sid = self.satellite_id
+        raw     = self.api.get_satellite(sid)
+        sensors = self.api.get_sensor_list(sid)
 
         return {
             "satellite": {
@@ -196,7 +218,6 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                 "systemMode": raw.get("logicalDialPos"),
             },
             "connection": {
-                "isConnected":            connected,
                 "rainDelay":              raw.get("rainDelay"),
                 "rainDelayDaysRemaining": raw.get("rainDelayDaysRemaining", 0),
                 "syncState":              raw.get("syncState"),
@@ -207,12 +228,6 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                 "inches":    raw.get("forecastInchesLimit"),
                 "delayDays": raw.get("forecastDelayDays"),
             },
-            "alerts": {
-                "alarms":   alerts.get("unackedAlarmCount", 0),
-                "warnings": alerts.get("unackedWarningCount", 0),
-            },
-            "programs":  programs_data,
-            "stations":  stations_data,
             "sensors": [
                 {
                     "id":        s.get("id"),
@@ -225,6 +240,99 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                 }
                 for s in sensors
             ],
+        }
+
+
+class RainBirdProgramCoordinator(DataUpdateCoordinator):
+    """
+    Program coordinator — polls every 1 hour (configurable).
+
+    Fetches: programs with schedule, adjust settings and assigned runtimes.
+    Tolerates up to 3 consecutive errors before marking unavailable.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        api: RainBirdAPI,
+        satellite_id: int,
+        scan_interval: int,
+    ) -> None:
+        super().__init__(
+            hass, _LOGGER, name=f"{DOMAIN}_programs",
+            update_interval=timedelta(seconds=scan_interval),
+        )
+        self.api = api
+        self.satellite_id = satellite_id
+        self._consecutive_errors = 0
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        try:
+            data = await self.hass.async_add_executor_job(self._fetch_data)
+            self._consecutive_errors = 0
+            return data
+        except Exception as err:
+            self._consecutive_errors += 1
+            if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                self._consecutive_errors = 0
+                raise UpdateFailed(f"Error fetching Rain Bird program data: {err}") from err
+            _LOGGER.warning(
+                "Transient program error (%d/%d), keeping last known data: %s",
+                self._consecutive_errors, MAX_CONSECUTIVE_ERRORS, err
+            )
+            return self.data
+
+    def _fetch_data(self) -> dict[str, Any]:
+        sid = self.satellite_id
+
+        programs   = self.api.get_program_list(sid)
+        stations   = self.api.get_station_list(sid)
+        assigned   = self.api.get_programs_assigned_runtime(sid)
+        flow_zones = self.api.get_flow_elements(sid)
+        flow_mon   = self.api.get_flow_monitoring(sid)
+
+        # Map stationId → assigned runtimes
+        station_runtime: dict[int, list] = {}
+        for item in assigned:
+            sid_key = item["stationId"]
+            for prog in item.get("runtimeProgramAssignedList", []):
+                station_runtime.setdefault(sid_key, []).append({
+                    "programId":       prog.get("programId"),
+                    "programName":     prog.get("programShortName"),
+                    "baseRunTime":     prog.get("baseRunTime"),
+                    "adjustedRunTime": prog.get("adjustedRunTime"),
+                })
+
+        # Enrich stations with assigned programs
+        stations_data = []
+        for s in stations:
+            stations_data.append({
+                "id":       s["id"],
+                "name":     s.get("name"),
+                "terminal": s.get("terminal"),
+                "programs": station_runtime.get(s["id"], []),
+            })
+
+        # Enrich programs
+        programs_data = []
+        for p in programs:
+            et_type = p.get("etAdjustType", 6)
+            programs_data.append({
+                "id":            p.get("id"),
+                "name":          p.get("name"),
+                "shortName":     p.get("shortName"),
+                "isEnabled":     p.get("isEnabled"),
+                "startTime":     _parse_start_time(p.get("startTime")),
+                "weekDays":      _parse_weekdays(p.get("weekDays", "")),
+                "adjust":        p.get("programAdjust"),
+                "adjustedValue": p.get("tempProgramAdjust") if et_type == 7 else p.get("programAdjust"),
+                "steps":         p.get("numberOfProgramSteps"),
+                "etAdjustType":  et_type,
+            })
+
+        return {
+            "programs":  programs_data,
+            "stations":  stations_data,
             "flowZones": [
                 {
                     "id":              fz.get("id"),
@@ -240,5 +348,4 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                 "highFlowThreshold": flow_mon.get("highFlowThreshold"),
                 "lowFlowThreshold":  flow_mon.get("lowFlowThreshold"),
             },
-            "eventLogs": event_logs,
         }

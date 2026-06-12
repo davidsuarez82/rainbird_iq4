@@ -17,15 +17,19 @@ from .const import (
     CONF_PASSWORD,
     CONF_SATELLITE_ID,
     CONF_SCAN_INTERVAL,
+    CONF_SCAN_INTERVAL_CONFIG,
+    CONF_SCAN_INTERVAL_PROGRAM,
     CONF_USERNAME,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL_CONFIG,
+    DEFAULT_SCAN_INTERVAL_PROGRAM,
     DOMAIN,
 )
-from .coordinator import RainBirdCoordinator
+from .coordinator import RainBirdCoordinator, RainBirdConfigCoordinator, RainBirdProgramCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "binary_sensor", "calendar"]
+PLATFORMS = ["sensor", "binary_sensor", "calendar", "button"]
 
 
 def _resolve_station(hass: HomeAssistant, coordinator: RainBirdCoordinator, entity_id: str) -> int:
@@ -34,7 +38,8 @@ def _resolve_station(hass: HomeAssistant, coordinator: RainBirdCoordinator, enti
     if not state:
         raise ServiceValidationError(f"Entity {entity_id} not found")
     friendly_name = state.attributes.get("friendly_name", "")
-    satellite_name = coordinator.data.get("satellite", {}).get("name", "")
+    config_data = hass.data[DOMAIN][coordinator.config_entry_id]["config"].data
+    satellite_name = config_data.get("satellite", {}).get("name", "") if config_data else ""
     for station in coordinator.data.get("stations", []):
         if friendly_name == f"{satellite_name} {station['name']}":
             return station["id"]
@@ -44,16 +49,18 @@ def _resolve_station(hass: HomeAssistant, coordinator: RainBirdCoordinator, enti
     )
 
 
-def _resolve_program(hass: HomeAssistant, coordinator: RainBirdCoordinator, entity_id: str) -> int:
+def _resolve_program(hass: HomeAssistant, program_coordinator: RainBirdProgramCoordinator, entity_id: str) -> int:
     """Resolve a program sensor entity_id to its Rain Bird program_id."""
     state = hass.states.get(entity_id)
     if not state:
         raise ServiceValidationError(f"Entity {entity_id} not found")
     friendly_name = state.attributes.get("friendly_name", "")
-    satellite_name = coordinator.data.get("satellite", {}).get("name", "")
-    for program in coordinator.data.get("programs", []):
-        if friendly_name == f"{satellite_name} Program {program['shortName']} Status":
-            return program["id"]
+    for program in program_coordinator.data.get("programs", []):
+        # Match against Program X Status name
+        for entry_id, coordinators in hass.data[DOMAIN].items():
+            satellite_name = coordinators["config"].data.get("satellite", {}).get("name", "") if coordinators["config"].data else ""
+            if friendly_name == f"{satellite_name} Program {program['shortName']} Status":
+                return program["id"]
     raise ServiceValidationError(
         f"Could not match entity {entity_id} to a program. "
         f"Please select a Program Status sensor."
@@ -62,90 +69,125 @@ def _resolve_program(hass: HomeAssistant, coordinator: RainBirdCoordinator, enti
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Rain Bird IQ4 from a config entry."""
-    username      = entry.data[CONF_USERNAME]
-    password      = entry.data[CONF_PASSWORD]
-    satellite_id  = entry.data[CONF_SATELLITE_ID]
-    company_id    = entry.data[CONF_COMPANY_ID]
-    scan_interval = entry.options.get(
-        CONF_SCAN_INTERVAL,
-        entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
-    )
+    username     = entry.data[CONF_USERNAME]
+    password     = entry.data[CONF_PASSWORD]
+    satellite_id = entry.data[CONF_SATELLITE_ID]
+    company_id   = entry.data[CONF_COMPANY_ID]
+
+    scan_realtime = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    scan_config   = entry.options.get(CONF_SCAN_INTERVAL_CONFIG, DEFAULT_SCAN_INTERVAL_CONFIG)
+    scan_program  = entry.options.get(CONF_SCAN_INTERVAL_PROGRAM, DEFAULT_SCAN_INTERVAL_PROGRAM)
 
     auth = RainBirdAuth(username, password)
     api  = RainBirdAPI(auth)
 
-    coordinator = RainBirdCoordinator(
-        hass, api, satellite_id, company_id, scan_interval,
-    )
+    coordinator         = RainBirdCoordinator(hass, api, satellite_id, company_id, scan_realtime)
+    config_coordinator  = RainBirdConfigCoordinator(hass, api, satellite_id, scan_config)
+    program_coordinator = RainBirdProgramCoordinator(hass, api, satellite_id, scan_program)
 
     try:
         await coordinator.async_config_entry_first_refresh()
+        await config_coordinator.async_config_entry_first_refresh()
+        await program_coordinator.async_config_entry_first_refresh()
     except Exception as err:
         raise ConfigEntryNotReady(f"Unable to connect to Rain Bird: {err}") from err
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        "realtime": coordinator,
+        "config":   config_coordinator,
+        "program":  program_coordinator,
+    }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
     # ── Service handlers ──────────────────────────────────────────────────────
 
     async def handle_start_zone(call: ServiceCall) -> None:
-        station_id = _resolve_station(hass, coordinator, call.data["station_entity"])
+        entity_id  = call.data["station_entity"]
         duration   = call.data["duration"]
-        await hass.async_add_executor_job(
-            api.start_station, station_id, duration * 60
-        )
+        state = hass.states.get(entity_id)
+        if not state:
+            raise ServiceValidationError(f"Entity {entity_id} not found")
+        friendly_name  = state.attributes.get("friendly_name", "")
+        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
+        station_id = None
+        for station in coordinator.data.get("stations", []):
+            if friendly_name == f"{satellite_name} {station['name']}":
+                station_id = station["id"]
+                break
+        if not station_id:
+            raise ServiceValidationError(f"Could not match entity {entity_id} to a station.")
+        await hass.async_add_executor_job(api.start_station, station_id, duration * 60)
         await coordinator.async_request_refresh()
 
     async def handle_stop_zone(call: ServiceCall) -> None:
-        station_id = _resolve_station(hass, coordinator, call.data["station_entity"])
+        entity_id = call.data["station_entity"]
+        state = hass.states.get(entity_id)
+        if not state:
+            raise ServiceValidationError(f"Entity {entity_id} not found")
+        friendly_name  = state.attributes.get("friendly_name", "")
+        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
+        station_id = None
+        for station in coordinator.data.get("stations", []):
+            if friendly_name == f"{satellite_name} {station['name']}":
+                station_id = station["id"]
+                break
+        if not station_id:
+            raise ServiceValidationError(f"Could not match entity {entity_id} to a station.")
         await hass.async_add_executor_job(api.stop_station, station_id)
         await coordinator.async_request_refresh()
 
     async def handle_set_rain_delay(call: ServiceCall) -> None:
-        await hass.async_add_executor_job(
-            api.set_rain_delay, satellite_id, call.data["days"]
-        )
-        await coordinator.async_request_refresh()
+        await hass.async_add_executor_job(api.set_rain_delay, satellite_id, call.data["days"])
+        await config_coordinator.async_request_refresh()
 
     async def handle_enable_forecast(call: ServiceCall) -> None:
         await hass.async_add_executor_job(
-            api.set_forecast,
-            satellite_id,
-            True,
-            int(call.data["percent"]),
-            float(call.data["rainfall"]),
-            int(call.data["delay_days"]),
+            api.set_forecast, satellite_id, True,
+            int(call.data["percent"]), float(call.data["rainfall"]), int(call.data["delay_days"]),
         )
-        await coordinator.async_request_refresh()
+        await config_coordinator.async_request_refresh()
 
     async def handle_disable_forecast(call: ServiceCall) -> None:
-        await hass.async_add_executor_job(
-            api.set_forecast, satellite_id, False
-        )
-        await coordinator.async_request_refresh()
+        await hass.async_add_executor_job(api.set_forecast, satellite_id, False)
+        await config_coordinator.async_request_refresh()
 
     async def handle_weather_adjust_automatic(call: ServiceCall) -> None:
-        program_id = _resolve_program(hass, coordinator, call.data["program_entity"])
-        await hass.async_add_executor_job(
-            api.set_weather_adjust_method, program_id, 7
-        )
-        await coordinator.async_request_refresh()
+        entity_id = call.data["program_entity"]
+        state = hass.states.get(entity_id)
+        if not state:
+            raise ServiceValidationError(f"Entity {entity_id} not found")
+        friendly_name  = state.attributes.get("friendly_name", "")
+        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
+        program_id = None
+        for program in program_coordinator.data.get("programs", []):
+            if friendly_name == f"{satellite_name} Program {program['shortName']} Status":
+                program_id = program["id"]
+                break
+        if not program_id:
+            raise ServiceValidationError(f"Could not match entity {entity_id} to a program.")
+        await hass.async_add_executor_job(api.set_weather_adjust_method, program_id, 7)
+        await program_coordinator.async_request_refresh()
 
     async def handle_weather_adjust_manual(call: ServiceCall) -> None:
-        program_id      = _resolve_program(hass, coordinator, call.data["program_entity"])
+        entity_id = call.data["program_entity"]
+        state = hass.states.get(entity_id)
+        if not state:
+            raise ServiceValidationError(f"Entity {entity_id} not found")
+        friendly_name  = state.attributes.get("friendly_name", "")
+        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
+        program_id = None
+        for program in program_coordinator.data.get("programs", []):
+            if friendly_name == f"{satellite_name} Program {program['shortName']} Status":
+                program_id = program["id"]
+                break
+        if not program_id:
+            raise ServiceValidationError(f"Could not match entity {entity_id} to a program.")
         seasonal_adjust = call.data.get("seasonal_adjust", 100)
-        await hass.async_add_executor_job(
-            api.set_weather_adjust_method, program_id, 6
-        )
-        await hass.async_add_executor_job(
-            api.set_seasonal_adjust, program_id, seasonal_adjust
-        )
-        await coordinator.async_request_refresh()
-
-    # ── Register services ─────────────────────────────────────────────────────
+        await hass.async_add_executor_job(api.set_weather_adjust_method, program_id, 6)
+        await hass.async_add_executor_job(api.set_seasonal_adjust, program_id, seasonal_adjust)
+        await program_coordinator.async_request_refresh()
 
     hass.services.async_register(DOMAIN, "start_zone", handle_start_zone)
     hass.services.async_register(DOMAIN, "stop_zone", handle_stop_zone)
@@ -159,7 +201,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Handle options update — reload the integration to apply new settings."""
+    """Handle options update — reload the integration."""
     await hass.config_entries.async_reload(entry.entry_id)
 
 

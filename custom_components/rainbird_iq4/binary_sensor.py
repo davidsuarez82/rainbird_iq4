@@ -14,7 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import RainBirdCoordinator
+from .coordinator import RainBirdCoordinator, RainBirdConfigCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,33 +25,42 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Rain Bird IQ4 binary sensors from a config entry."""
-    coordinator: RainBirdCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinators       = hass.data[DOMAIN][entry.entry_id]
+    config_coordinator = coordinators["config"]
 
     entities = [
-        RainBirdConnectionBinarySensor(coordinator),
-        RainBirdForecastBinarySensor(coordinator),
+        RainBirdConnectionBinarySensor(coordinators["realtime"], config_coordinator),
+        RainBirdForecastBinarySensor(config_coordinator),
     ]
 
-    # Add a binary sensor for each physical sensor (e.g. rain sensor)
-    for sensor in coordinator.data.get("sensors", []):
-        if sensor.get("type", -1) != -1:  # -1 means no sensor installed
-            entities.append(RainBirdRainSensor(coordinator, sensor))
+    for sensor in config_coordinator.data.get("sensors", []):
+        if sensor.get("type", -1) != -1:
+            entities.append(RainBirdRainSensor(config_coordinator, sensor))
 
     async_add_entities(entities)
 
 
-class RainBirdBaseBinarySensor(CoordinatorEntity, BinarySensorEntity):
-    """Base class for Rain Bird IQ4 binary sensors."""
+class RainBirdConnectionBinarySensor(BinarySensorEntity):
+    """Binary sensor reporting whether the controller is connected — real-time."""
 
-    def __init__(self, coordinator: RainBirdCoordinator) -> None:
-        super().__init__(coordinator)
-        satellite = coordinator.data.get("satellite", {})
+    def __init__(
+        self,
+        coordinator: RainBirdCoordinator,
+        config_coordinator: RainBirdConfigCoordinator,
+    ) -> None:
+        self._coordinator = coordinator
+        self._config_coordinator = config_coordinator
+        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
+        self._attr_unique_id = f"{self._satellite_id}_connected"
+        self._attr_name = f"{self._satellite_name} Connected"
+        self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+        self._attr_icon = "mdi:cloud-check"
 
     @property
     def device_info(self) -> DeviceInfo:
-        satellite = self.coordinator.data.get("satellite", {})
+        satellite = self._config_coordinator.data.get("satellite", {}) if self._config_coordinator.data else {}
         return DeviceInfo(
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
@@ -60,38 +69,55 @@ class RainBirdBaseBinarySensor(CoordinatorEntity, BinarySensorEntity):
             sw_version=satellite.get("version"),
         )
 
-
-class RainBirdConnectionBinarySensor(RainBirdBaseBinarySensor):
-    """Binary sensor reporting whether the controller is connected to the cloud."""
-
-    def __init__(self, coordinator: RainBirdCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._satellite_id}_connected"
-        self._attr_name = f"{self._satellite_name} Connected"
-        self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
-        self._attr_icon = "mdi:cloud-check"
-
     @property
     def is_on(self) -> bool:
-        return self.coordinator.data.get("connection", {}).get("isConnected", False)
+        return self._coordinator.data.get("connection", {}).get("isConnected", False) if self._coordinator.data else False
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.last_update_success
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            self._coordinator.async_add_listener(self.async_write_ha_state)
+        )
+        self.async_on_remove(
+            self._config_coordinator.async_add_listener(self.async_write_ha_state)
+        )
 
 
-class RainBirdForecastBinarySensor(RainBirdBaseBinarySensor):
-    """Binary sensor reporting whether forecast rain delay is enabled."""
+class RainBirdForecastBinarySensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor reporting whether forecast rain delay is enabled — config polling."""
 
-    def __init__(self, coordinator: RainBirdCoordinator) -> None:
+    def __init__(self, coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
+        self._satellite_id = coordinator.satellite_id
+        satellite = coordinator.data.get("satellite", {}) if coordinator.data else {}
+        self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_forecast_enabled"
         self._attr_name = f"{self._satellite_name} Forecast Rain Delay"
         self._attr_device_class = BinarySensorDeviceClass.RUNNING
         self._attr_icon = "mdi:weather-lightning-rainy"
 
     @property
+    def device_info(self) -> DeviceInfo:
+        satellite = self.coordinator.data.get("satellite", {}) if self.coordinator.data else {}
+        return DeviceInfo(
+            identifiers={(DOMAIN, str(self._satellite_id))},
+            name=self._satellite_name,
+            manufacturer="Rain Bird",
+            model="ESP-TM2",
+            sw_version=satellite.get("version"),
+        )
+
+    @property
     def is_on(self) -> bool:
-        return self.coordinator.data.get("forecast", {}).get("enabled", False)
+        return self.coordinator.data.get("forecast", {}).get("enabled", False) if self.coordinator.data else False
 
     @property
     def extra_state_attributes(self) -> dict:
+        if not self.coordinator.data:
+            return {}
         forecast = self.coordinator.data.get("forecast", {})
         if not forecast.get("enabled"):
             return {}
@@ -102,18 +128,34 @@ class RainBirdForecastBinarySensor(RainBirdBaseBinarySensor):
         }
 
 
-class RainBirdRainSensor(RainBirdBaseBinarySensor):
-    """Binary sensor reporting whether the rain sensor is triggered."""
+class RainBirdRainSensor(CoordinatorEntity, BinarySensorEntity):
+    """Binary sensor reporting whether the rain sensor is triggered — config polling."""
 
-    def __init__(self, coordinator: RainBirdCoordinator, sensor: dict) -> None:
+    def __init__(self, coordinator: RainBirdConfigCoordinator, sensor: dict) -> None:
         super().__init__(coordinator)
         self._sensor_id = sensor["id"]
+        self._satellite_id = coordinator.satellite_id
+        satellite = coordinator.data.get("satellite", {}) if coordinator.data else {}
+        self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_sensor_{self._sensor_id}"
         self._attr_name = f"{self._satellite_name} {sensor.get('name', 'Rain Sensor')}"
         self._attr_device_class = BinarySensorDeviceClass.MOISTURE
         self._attr_icon = "mdi:weather-rainy"
 
+    @property
+    def device_info(self) -> DeviceInfo:
+        satellite = self.coordinator.data.get("satellite", {}) if self.coordinator.data else {}
+        return DeviceInfo(
+            identifiers={(DOMAIN, str(self._satellite_id))},
+            name=self._satellite_name,
+            manufacturer="Rain Bird",
+            model="ESP-TM2",
+            sw_version=satellite.get("version"),
+        )
+
     def _get_sensor(self) -> dict:
+        if not self.coordinator.data:
+            return {}
         for s in self.coordinator.data.get("sensors", []):
             if s["id"] == self._sensor_id:
                 return s

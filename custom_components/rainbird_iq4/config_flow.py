@@ -17,8 +17,12 @@ from .const import (
     CONF_PASSWORD,
     CONF_SATELLITE_ID,
     CONF_SCAN_INTERVAL,
+    CONF_SCAN_INTERVAL_CONFIG,
+    CONF_SCAN_INTERVAL_PROGRAM,
     CONF_USERNAME,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_SCAN_INTERVAL_CONFIG,
+    DEFAULT_SCAN_INTERVAL_PROGRAM,
     DOMAIN,
 )
 
@@ -28,12 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 async def _validate_credentials(
     hass: HomeAssistant, username: str, password: str
 ) -> dict[str, Any]:
-    """
-    Validate credentials and discover satellite and company IDs.
-
-    Returns a dict with satellite_id and company_id on success,
-    or raises an exception on failure.
-    """
+    """Validate credentials and discover satellite and company IDs."""
     auth = RainBirdAuth(username, password)
     api = RainBirdAPI(auth)
 
@@ -85,13 +84,10 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(
                     title=info["name"],
                     data={
-                        CONF_USERNAME:      username,
-                        CONF_PASSWORD:      password,
-                        CONF_SATELLITE_ID:  info["satellite_id"],
-                        CONF_COMPANY_ID:    info["company_id"],
-                        CONF_SCAN_INTERVAL: user_input.get(
-                            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
-                        ),
+                        CONF_USERNAME:     username,
+                        CONF_PASSWORD:     password,
+                        CONF_SATELLITE_ID: info["satellite_id"],
+                        CONF_COMPANY_ID:   info["company_id"],
                     },
                 )
 
@@ -100,21 +96,18 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({
                 vol.Required(CONF_USERNAME): str,
                 vol.Required(CONF_PASSWORD): str,
-                vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
             }),
             errors=errors,
         )
 
     @staticmethod
-    def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> config_entries.OptionsFlow:
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> config_entries.OptionsFlow:
         """Return the options flow handler."""
         return RainBirdOptionsFlow(config_entry)
 
 
 class RainBirdOptionsFlow(config_entries.OptionsFlow):
-    """Handle Rain Bird IQ4 options — allows changing scan interval after setup."""
+    """Handle Rain Bird IQ4 options."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self._config_entry = config_entry
@@ -122,20 +115,31 @@ class RainBirdOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the options form."""
+        """Show the options form."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        current_interval = self._config_entry.options.get(
-            CONF_SCAN_INTERVAL,
-            self._config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+        current_realtime = self._config_entry.options.get(
+            CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+        )
+        current_config = self._config_entry.options.get(
+            CONF_SCAN_INTERVAL_CONFIG, DEFAULT_SCAN_INTERVAL_CONFIG
+        )
+        current_program = self._config_entry.options.get(
+            CONF_SCAN_INTERVAL_PROGRAM, DEFAULT_SCAN_INTERVAL_PROGRAM
         )
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
-                vol.Optional(CONF_SCAN_INTERVAL, default=current_interval): vol.All(
+                vol.Optional(CONF_SCAN_INTERVAL, default=current_realtime): vol.All(
                     int, vol.Range(min=10, max=300)
+                ),
+                vol.Optional(CONF_SCAN_INTERVAL_CONFIG, default=current_config): vol.All(
+                    int, vol.Range(min=60, max=3600)
+                ),
+                vol.Optional(CONF_SCAN_INTERVAL_PROGRAM, default=current_program): vol.All(
+                    int, vol.Range(min=300, max=86400)
                 ),
             }),
         )

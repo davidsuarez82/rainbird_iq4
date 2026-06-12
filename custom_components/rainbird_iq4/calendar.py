@@ -10,10 +10,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import RainBirdCoordinator
+from .coordinator import RainBirdConfigCoordinator, RainBirdProgramCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,13 +29,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Rain Bird IQ4 calendar from a config entry."""
-    coordinator: RainBirdCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinators        = hass.data[DOMAIN][entry.entry_id]
+    config_coordinator  = coordinators["config"]
+    program_coordinator = coordinators["program"]
 
-    # One calendar entity per scheduled program
     entities = []
-    for program in coordinator.data.get("programs", []):
+    for program in program_coordinator.data.get("programs", []):
         if program.get("weekDays") and program.get("startTime"):
-            entities.append(RainBirdCalendar(coordinator, program))
+            entities.append(RainBirdCalendar(program_coordinator, config_coordinator, program))
 
     async_add_entities(entities)
 
@@ -48,16 +48,7 @@ def _get_next_occurrences(
     from_date: date,
     days_ahead: int = 30,
 ) -> list[CalendarEvent]:
-    """
-    Generate CalendarEvent objects for the next occurrences of a program.
-
-    Args:
-        week_days: List of day names e.g. ['Tue', 'Thu', 'Sat']
-        start_time_str: Start time as 'HH:MM'
-        total_minutes: Total duration of the program in minutes
-        from_date: Start generating from this date
-        days_ahead: How many days into the future to generate
-    """
+    """Generate CalendarEvent objects for the next occurrences of a program."""
     events = []
     target_weekdays = {WEEKDAY_MAP[d] for d in week_days if d in WEEKDAY_MAP}
 
@@ -73,7 +64,7 @@ def _get_next_occurrences(
         if check_date.weekday() in target_weekdays:
             start_dt = datetime(
                 check_date.year, check_date.month, check_date.day, h, m,
-		tzinfo=zoneinfo.ZoneInfo("Europe/Amsterdam")
+                tzinfo=zoneinfo.ZoneInfo("Europe/Amsterdam")
             )
             end_dt = start_dt + duration
             events.append(
@@ -87,26 +78,28 @@ def _get_next_occurrences(
     return events
 
 
-class RainBirdCalendar(CoordinatorEntity, CalendarEntity):
+class RainBirdCalendar(CalendarEntity):
     """Calendar entity showing scheduled irrigation events for one program."""
 
     def __init__(
-        self, coordinator: RainBirdCoordinator, program: dict
+        self,
+        coordinator: RainBirdProgramCoordinator,
+        config_coordinator: RainBirdConfigCoordinator,
+        program: dict,
     ) -> None:
-        super().__init__(coordinator)
+        self._coordinator = coordinator
+        self._config_coordinator = config_coordinator
         self._program_id = program["id"]
-        satellite = coordinator.data.get("satellite", {})
+        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_calendar_{self._program_id}"
-        self._attr_name = (
-            f"{self._satellite_name} Program {program['shortName']} Schedule"
-        )
+        self._attr_name = f"{self._satellite_name} Program {program['shortName']} Schedule"
         self._attr_icon = "mdi:calendar-clock"
 
     @property
     def device_info(self) -> DeviceInfo:
-        satellite = self.coordinator.data.get("satellite", {})
+        satellite = self._config_coordinator.data.get("satellite", {}) if self._config_coordinator.data else {}
         return DeviceInfo(
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
@@ -116,7 +109,9 @@ class RainBirdCalendar(CoordinatorEntity, CalendarEntity):
         )
 
     def _get_program(self) -> dict:
-        for p in self.coordinator.data.get("programs", []):
+        if not self._coordinator.data:
+            return {}
+        for p in self._coordinator.data.get("programs", []):
             if p["id"] == self._program_id:
                 return p
         return {}
@@ -124,7 +119,9 @@ class RainBirdCalendar(CoordinatorEntity, CalendarEntity):
     def _total_minutes(self, program: dict) -> int:
         """Calculate total irrigation time in minutes for this program."""
         total = 0
-        for station in self.coordinator.data.get("stations", []):
+        if not self._coordinator.data:
+            return 30
+        for station in self._coordinator.data.get("stations", []):
             for prog in station.get("programs", []):
                 if prog.get("programId") == self._program_id:
                     runtime = prog.get("adjustedRunTime", "00:00:00")
@@ -133,7 +130,19 @@ class RainBirdCalendar(CoordinatorEntity, CalendarEntity):
                         total += int(parts[0]) * 60 + int(parts[1])
                     except Exception:
                         pass
-        return total or 30  # fallback to 30 min if no data
+        return total or 30
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.last_update_success
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            self._coordinator.async_add_listener(self.async_write_ha_state)
+        )
+        self.async_on_remove(
+            self._config_coordinator.async_add_listener(self.async_write_ha_state)
+        )
 
     @property
     def event(self) -> CalendarEvent | None:
