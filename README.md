@@ -10,7 +10,7 @@ A Home Assistant custom integration for **Rain Bird IQ4** cloud-connected irriga
 
 ## Requirements
 
-- Home Assistant 2024.1 or newer
+- Home Assistant 2025.1 or newer
 - Rain Bird IQ4 account (https://iq4.rainbird.com)
 - A Rain Bird controller connected to the IQ4 cloud (e.g. ESP-TM2)
 

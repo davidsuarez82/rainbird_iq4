@@ -2,12 +2,13 @@
   "domain": "rainbird_iq4",
   "name": "Rain Bird IQ4",
   "version": "1.0.0",
-  "documentation": "https://github.com/yourusername/rainbird_iq4",
-  "issue_tracker": "https://github.com/yourusername/rainbird_iq4/issues",
+  "documentation": "https://github.com/davidsuarez82/rainbird_iq4",
+  "issue_tracker": "https://github.com/davidsuarez82/rainbird_iq4/issues",
   "requirements": ["curl_cffi>=0.7.0"],
   "dependencies": [],
-  "codeowners": [],
+  "codeowners": ["@davidsuarez82"],
   "iot_class": "cloud_polling",
   "config_flow": true,
-  "loggers": ["custom_components.rainbird_iq4"]
+  "loggers": ["custom_components.rainbird_iq4"],
+  "homeassistant": "2025.1.0"
 }

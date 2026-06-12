@@ -3,6 +3,6 @@
   "domain": "rainbird_iq4",
   "documentation": "https://github.com/davidsuarez82/rainbird_iq4",
   "issue_tracker": "https://github.com/davidsuarez82/rainbird_iq4/issues",
-  "homeassistant": "2024.1.0",
+  "codeowners": ["@davidsuarez82"],
   "iot_class": "cloud_polling"
 }
