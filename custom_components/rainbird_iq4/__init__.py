@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import voluptuous as vol
 
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
@@ -30,6 +32,20 @@ from .coordinator import RainBirdCoordinator, RainBirdConfigCoordinator, RainBir
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "binary_sensor", "calendar", "button"]
+FRONTEND_URL = f"/{DOMAIN}/rainbird_iq4_card.js"
+FRONTEND_PATH = Path(__file__).parent / "frontend" / "rainbird_iq4_card.js"
+_FRONTEND_REGISTERED = False
+
+
+async def _async_register_frontend(hass: HomeAssistant) -> None:
+    """Register the bundled Lovelace card frontend file."""
+    global _FRONTEND_REGISTERED
+    if _FRONTEND_REGISTERED:
+        return
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(FRONTEND_URL, str(FRONTEND_PATH), cache_headers=False)]
+    )
+    _FRONTEND_REGISTERED = True
 
 
 def _resolve_station(hass: HomeAssistant, coordinator: RainBirdCoordinator, entity_id: str) -> int:
@@ -98,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "program":  program_coordinator,
     }
 
+    await _async_register_frontend(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
