@@ -26,7 +26,8 @@ A Home Assistant custom integration for **Rain Bird IQ4** cloud-connected irriga
 - **7 actions** to control irrigation, rain delay, and seasonal adjust settings
 - **Calendar** — upcoming irrigation events per program
 - **Configurable polling intervals** — separate intervals for real-time, config, and program data
-- **Manual refresh button** — force immediate update of all data
+- **Manual refresh button** — force immediate update of all data, rate-limited to avoid excessive cloud requests
+- **Optional Lovelace card** — compact zone controls with per-zone durations and optimistic feedback
 - **Fault tolerance** — tolerates up to 3 consecutive API errors before marking entities unavailable
 
 ---
@@ -41,11 +42,27 @@ A Home Assistant custom integration for **Rain Bird IQ4** cloud-connected irriga
 4. Search for **Rain Bird IQ4** and install
 5. Restart Home Assistant
 
+To use the bundled Lovelace card, add this dashboard resource after restarting:
+
+```text
+/rainbird_iq4/rainbird_iq4_card.js
+```
+
+Resource type: **JavaScript module**.
+
 ### Manual
 
 1. Download the latest release
 2. Copy the `custom_components/rainbird_iq4` folder to your HA `config/custom_components/` directory
 3. Restart Home Assistant
+
+For the bundled Lovelace card, add this dashboard resource:
+
+```text
+/rainbird_iq4/rainbird_iq4_card.js
+```
+
+Resource type: **JavaScript module**.
 
 ---
 
@@ -98,6 +115,40 @@ One calendar entity per scheduled program showing upcoming irrigation events.
 
 ### Button
 - **Refresh** — triggers immediate update of all three coordinators
+
+Refresh requests are rate-limited to one successful refresh every 30 seconds. This prevents repeated button presses or stale browser tabs from generating a burst of cloud API calls.
+
+---
+
+## Lovelace Card
+
+The integration includes an optional dashboard card for quick irrigation control.
+
+![Rain Bird IQ4 Lovelace card](docs/images/rainbird-iq4-card.png)
+
+Add this card manually to a dashboard:
+
+```yaml
+type: custom:rainbird-iq4-card
+title: Garden irrigation
+auto: true
+default_duration: 10
+```
+
+The card auto-discovers Rain Bird IQ4 station sensors, shows connection/rain-delay/alert status, and lets you set a separate duration for each zone before starting it.
+
+Card options:
+
+| Option | Default | Description |
+|---|---|---|
+| `title` | `Rain Bird IQ4` | Header shown on the card |
+| `auto` | `true` | Auto-discover station entities |
+| `default_duration` | `10` | Initial run duration in minutes |
+| `entities` | unset | Fixed list of station entities |
+| `show_programs` | `true` | Show program schedule/status rows |
+| `refresh_throttle_seconds` | `30` | Minimum seconds between refresh button calls from the card |
+| `start_refresh_delay_seconds` | `8` | Delay before refreshing after a zone starts |
+| `stop_refresh_delay_seconds` | `5` | Delay before refreshing after a zone stops |
 
 ---
 
