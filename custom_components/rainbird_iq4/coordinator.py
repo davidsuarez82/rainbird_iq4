@@ -206,7 +206,35 @@ class RainBirdConfigCoordinator(DataUpdateCoordinator):
 
     def _fetch_data(self) -> dict[str, Any]:
         sid = self.satellite_id
-        raw     = self.api.get_satellite(sid)
+
+        # GetSatellite returns 403 on some controller types (e.g. ESP-ME3).
+        # Fall back to GetSatelliteList in that case.
+        raw = self.api.get_satellite(sid)
+        if raw is None:
+            _LOGGER.info(
+                "GetSatellite unavailable for satellite %s, using GetSatelliteList fallback",
+                sid,
+            )
+            sat_list = self.api.get_satellite_list()
+            match = next((s for s in sat_list if s.get("id") == sid), None)
+            if match:
+                raw = {
+                    "id":                   match.get("id"),
+                    "name":                 match.get("name"),
+                    "versionString":        match.get("version"),
+                    "satelliteEnabled":     match.get("satelliteEnabled", True),
+                    "logicalDialPos":       match.get("frontPanelState"),
+                    "rainDelay":            match.get("rainDelay", 0),
+                    "rainDelayDaysRemaining": 0,
+                    "syncState":            match.get("syncState"),
+                    "useForecast":          False,
+                    "forecastPercentLimit": None,
+                    "forecastInchesLimit":  None,
+                    "forecastDelayDays":    None,
+                }
+            else:
+                raw = {}
+
         sensors = self.api.get_sensor_list(sid)
 
         return {

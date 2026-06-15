@@ -57,9 +57,26 @@ class RainBirdAPI:
 
     # ── Satellite ─────────────────────────────────────────────────────────────
 
-    def get_satellite(self, satellite_id: int) -> dict:
-        """Get full satellite (controller) details."""
-        return self._get("Satellite/GetSatellite", {"satelliteId": satellite_id}) or {}
+    def get_satellite(self, satellite_id: int) -> dict | None:
+        """Get full satellite (controller) details.
+        Returns None if the endpoint is not available (e.g. ESP-ME3 returns 403)."""
+        try:
+            return self._get("Satellite/GetSatellite", {"satelliteId": satellite_id})
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 403:
+                _LOGGER.debug(
+                    "GetSatellite returned 403 for satellite %s, will use fallback",
+                    satellite_id,
+                )
+                return None
+            raise
+
+    def get_satellite_list(self) -> list:
+        """Get list of all satellites for the account."""
+        return self._get(
+            "Satellite/GetSatelliteList",
+            {"includeInvisibleToCurrentUser": False},
+        ) or []
 
     def is_connected(self, satellite_id: int) -> bool:
         """Return True if the controller is currently connected to the cloud."""
@@ -216,6 +233,7 @@ class RainBirdAPI:
     def get_event_logs(self, satellite_id: int, hours: int = 24) -> list:
         """
         Get event logs for the last N hours.
+        Returns empty list if the endpoint is not available (e.g. ESP-ME3 returns 403).
 
         Event numbers:
           97    — station turning on (eventParameter1 = terminal number)
@@ -228,14 +246,23 @@ class RainBirdAPI:
         now = datetime.datetime.now()
         start = (now - datetime.timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S")
         end = (now + datetime.timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%S")
-        return self._post(
-            "EventLog/GetEventLogsBySatelliteIds_V2",
-            json=[satellite_id],
-            params={
-                "startTime": start,
-                "endTime": end,
-                "types": 15,
-                "includeAcknowledgedAlarms": "true",
-                "includeAcknowledgedWarnings": "true",
-            },
-        ) or []
+        try:
+            return self._post(
+                "EventLog/GetEventLogsBySatelliteIds_V2",
+                json=[satellite_id],
+                params={
+                    "startTime": start,
+                    "endTime": end,
+                    "types": 15,
+                    "includeAcknowledgedAlarms": "true",
+                    "includeAcknowledgedWarnings": "true",
+                },
+            ) or []
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 403:
+                _LOGGER.debug(
+                    "EventLog returned 403 for satellite %s, running zone detection unavailable",
+                    satellite_id,
+                )
+                return []
+            raise
