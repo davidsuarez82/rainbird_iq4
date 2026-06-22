@@ -33,3 +33,17 @@ WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 STATUS_IDLE = "-"
 STATUS_RUNNING = "R"
 STATUS_PAUSED = "P"
+
+# Controller type ID to model name mapping
+# Add new models here as they are reported by the community
+CONTROLLER_MODELS: dict[int, str] = {
+    57: "ESP-ME3",
+    69: "ESP-TM2",
+}
+
+
+def get_controller_model(controller_type: int | None) -> str:
+    """Return model name for a controller type ID."""
+    if controller_type is None:
+        return "Rain Bird IQ4"
+    return CONTROLLER_MODELS.get(controller_type, f"Rain Bird Controller (type {controller_type})")

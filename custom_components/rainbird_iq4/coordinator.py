@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import RainBirdAPI
-from .const import DOMAIN, WEEKDAY_NAMES
+from .const import DOMAIN, WEEKDAY_NAMES, get_controller_model
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -244,6 +244,7 @@ class RainBirdConfigCoordinator(DataUpdateCoordinator):
                 "version":    raw.get("versionString"),
                 "enabled":    raw.get("satelliteEnabled"),
                 "systemMode": raw.get("logicalDialPos"),
+                "model":      get_controller_model(raw.get("type")),
             },
             "connection": {
                 "rainDelay":              raw.get("rainDelay"),

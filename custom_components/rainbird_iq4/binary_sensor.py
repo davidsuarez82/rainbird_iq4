@@ -65,7 +65,7 @@ class RainBirdConnectionBinarySensor(BinarySensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
@@ -106,7 +106,7 @@ class RainBirdForecastBinarySensor(CoordinatorEntity, BinarySensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
@@ -149,7 +149,7 @@ class RainBirdRainSensor(CoordinatorEntity, BinarySensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 

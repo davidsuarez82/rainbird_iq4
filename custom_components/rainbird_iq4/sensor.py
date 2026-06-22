@@ -64,7 +64,7 @@ class RainBirdBaseSensor(CoordinatorEntity, SensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
@@ -135,7 +135,7 @@ class RainBirdRainDelaySensor(CoordinatorEntity, SensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=satellite.get("name", "Rain Bird IQ4"),
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
@@ -173,7 +173,7 @@ class RainBirdStationSensor(SensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
@@ -254,7 +254,7 @@ class RainBirdProgramSensor(SensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
@@ -322,7 +322,7 @@ class RainBirdControllerModeSensor(CoordinatorEntity, SensorEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
