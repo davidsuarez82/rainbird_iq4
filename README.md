@@ -197,3 +197,12 @@ If Rain Bird changes their API and the integration breaks, issues with debug log
 ## License
 
 MIT
+
+---
+
+## Credits
+
+- [@andreypopov](https://github.com/andreypopov) — Lovelace card and refresh rate limiting
+- [@allenporter](https://github.com/allenporter) — IQ4 protocol specification and pyrainbird collaboration
+- Inspired by the work discussed in [HA Core issue #142123](https://github.com/home-assistant/core/issues/142123)
+
