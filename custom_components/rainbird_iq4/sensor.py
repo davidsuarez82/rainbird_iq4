@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import RainBirdCoordinator, RainBirdConfigCoordinator, RainBirdProgramCoordinator
+from .coordinator import RainBirdCoordinator, RainBirdConfigCoordinator, RainBirdProgramCoordinator, PROGRAM_TYPE_WEEKLY, PROGRAM_TYPE_ODD, PROGRAM_TYPE_EVEN, PROGRAM_TYPE_CYCLIC
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -271,21 +271,48 @@ class RainBirdProgramSensor(SensorEntity):
         program = self._get_program()
         if not program.get("isEnabled"):
             return "disabled"
-        if not program.get("weekDays"):
+        if not program.get("startTime"):
+            return "not scheduled"
+        program_type = program.get("programType", PROGRAM_TYPE_WEEKLY)
+        if program_type == PROGRAM_TYPE_WEEKLY and not program.get("weekDays"):
             return "not scheduled"
         return "scheduled"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         program = self._get_program()
-        et_type = program.get("etAdjustType", 6)
-        return {
+        et_type      = program.get("etAdjustType", 6)
+        program_type = program.get("programType", PROGRAM_TYPE_WEEKLY)
+
+        # Build schedule_type string
+        if program_type == PROGRAM_TYPE_CYCLIC:
+            schedule_type = f"every {program.get('skipDays', 1)} days"
+        elif program_type == PROGRAM_TYPE_ODD:
+            schedule_type = "odd days"
+        elif program_type == PROGRAM_TYPE_EVEN:
+            schedule_type = "even days"
+        else:
+            schedule_type = "weekly"
+
+        attrs = {
             "start_time":      program.get("startTime"),
-            "week_days":       program.get("weekDays", []),
+            "schedule_type":   schedule_type,
             "steps":           program.get("steps"),
             "weather_adjust":  "automatic" if et_type == 7 else "none",
             "seasonal_adjust": program.get("adjustedValue"),
         }
+
+        if program_type == PROGRAM_TYPE_WEEKLY:
+            attrs["week_days"] = program.get("weekDays", [])
+        elif program_type in (PROGRAM_TYPE_ODD, PROGRAM_TYPE_EVEN):
+            excluded = program.get("excludedWeekDays", [])
+            if excluded:
+                attrs["excluded_days"] = excluded
+        elif program_type == PROGRAM_TYPE_CYCLIC:
+            attrs["skip_days"]               = program.get("skipDays", 1)
+            attrs["next_run"]                = program.get("nextCyclicalStartDate")
+
+        return attrs
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to coordinator updates."""

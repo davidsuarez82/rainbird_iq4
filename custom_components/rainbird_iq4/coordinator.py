@@ -39,6 +39,20 @@ def _parse_start_time(start_time_str: str | None) -> str | None:
         return None
 
 
+# Program schedule type IDs
+PROGRAM_TYPE_WEEKLY  = 0  # Fixed weekdays
+PROGRAM_TYPE_ODD     = 2  # Odd calendar days
+PROGRAM_TYPE_EVEN    = 4  # Even calendar days
+PROGRAM_TYPE_CYCLIC  = 5  # Every N days
+
+
+def _parse_excluded_weekdays(hybrid_str: str) -> list[str]:
+    """Parse hybridWeekDays — '0' means excluded, '1' means allowed."""
+    if not hybrid_str or len(hybrid_str) != 7:
+        return []
+    return [WEEKDAY_NAMES[i] for i, bit in enumerate(hybrid_str) if bit == "0"]
+
+
 def _process_event_logs(event_logs: list, stations: list) -> dict:
     """Process event logs to determine station status and last run times."""
     terminal_to_id = {s.get("terminal"): s.get("id") for s in stations}
@@ -345,18 +359,23 @@ class RainBirdProgramCoordinator(DataUpdateCoordinator):
         # Enrich programs
         programs_data = []
         for p in programs:
-            et_type = p.get("etAdjustType", 6)
+            et_type      = p.get("etAdjustType", 6)
+            program_type = p.get("type", PROGRAM_TYPE_WEEKLY)
             programs_data.append({
-                "id":            p.get("id"),
-                "name":          p.get("name"),
-                "shortName":     p.get("shortName"),
-                "isEnabled":     p.get("isEnabled"),
-                "startTime":     _parse_start_time(p.get("startTime")),
-                "weekDays":      _parse_weekdays(p.get("weekDays", "")),
-                "adjust":        p.get("programAdjust"),
-                "adjustedValue": p.get("tempProgramAdjust") if et_type == 7 else p.get("programAdjust"),
-                "steps":         p.get("numberOfProgramSteps"),
-                "etAdjustType":  et_type,
+                "id":                     p.get("id"),
+                "name":                   p.get("name"),
+                "shortName":              p.get("shortName"),
+                "isEnabled":              p.get("isEnabled"),
+                "startTime":              _parse_start_time(p.get("startTime")),
+                "programType":            program_type,
+                "weekDays":               _parse_weekdays(p.get("weekDays", "")),
+                "excludedWeekDays":       _parse_excluded_weekdays(p.get("hybridWeekDays", "")),
+                "skipDays":               p.get("skipDays", 1),
+                "nextCyclicalStartDate":  p.get("nextCyclicalStartDate"),
+                "adjust":                 p.get("programAdjust"),
+                "adjustedValue":          p.get("tempProgramAdjust") if et_type == 7 else p.get("programAdjust"),
+                "steps":                  p.get("numberOfProgramSteps"),
+                "etAdjustType":           et_type,
             })
 
         return {

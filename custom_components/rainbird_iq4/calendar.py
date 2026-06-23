@@ -12,7 +12,15 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .coordinator import RainBirdConfigCoordinator, RainBirdProgramCoordinator
+from .coordinator import (
+    RainBirdConfigCoordinator,
+    RainBirdProgramCoordinator,
+    PROGRAM_TYPE_WEEKLY,
+    PROGRAM_TYPE_ODD,
+    PROGRAM_TYPE_EVEN,
+    PROGRAM_TYPE_CYCLIC,
+    WEEKDAY_NAMES,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,49 +41,96 @@ async def async_setup_entry(
     config_coordinator  = coordinators["config"]
     program_coordinator = coordinators["program"]
 
+    tz = zoneinfo.ZoneInfo(hass.config.time_zone)
+
     entities = []
     for program in program_coordinator.data.get("programs", []):
-        if program.get("weekDays") and program.get("startTime"):
-            entities.append(RainBirdCalendar(program_coordinator, config_coordinator, program))
+        if program.get("startTime"):
+            entities.append(RainBirdCalendar(program_coordinator, config_coordinator, program, tz))
 
     async_add_entities(entities)
 
 
 def _get_next_occurrences(
-    week_days: list[str],
-    start_time_str: str,
+    program: dict,
     total_minutes: int,
     from_date: date,
+    tz: zoneinfo.ZoneInfo,
     days_ahead: int = 30,
 ) -> list[CalendarEvent]:
     """Generate CalendarEvent objects for the next occurrences of a program."""
     events = []
-    target_weekdays = {WEEKDAY_MAP[d] for d in week_days if d in WEEKDAY_MAP}
+    start_time_str = program.get("startTime")
+    if not start_time_str:
+        return events
 
     try:
         h, m = map(int, start_time_str.split(":"))
     except Exception:
         return events
 
-    duration = timedelta(minutes=total_minutes)
+    duration     = timedelta(minutes=total_minutes or 30)
+    program_type = program.get("programType", PROGRAM_TYPE_WEEKLY)
+    summary      = f"Irrigation: Program {program.get('shortName', '')}"
 
-    for i in range(days_ahead):
-        check_date = from_date + timedelta(days=i)
-        if check_date.weekday() in target_weekdays:
-            start_dt = datetime(
-                check_date.year, check_date.month, check_date.day, h, m,
-                tzinfo=zoneinfo.ZoneInfo("Europe/Amsterdam")
-            )
-            end_dt = start_dt + duration
-            events.append(
-                CalendarEvent(
-                    start=start_dt,
-                    end=end_dt,
-                    summary=f"Irrigation: Program {check_date.strftime('%a')}",
-                )
-            )
+    if program_type == PROGRAM_TYPE_WEEKLY:
+        target_weekdays = {WEEKDAY_MAP[d] for d in program.get("weekDays", []) if d in WEEKDAY_MAP}
+        for i in range(days_ahead):
+            check_date = from_date + timedelta(days=i)
+            if check_date.weekday() in target_weekdays:
+                events.append(_make_event(check_date, h, m, duration, tz, summary))
+
+    elif program_type in (PROGRAM_TYPE_ODD, PROGRAM_TYPE_EVEN):
+        excluded_days = {WEEKDAY_MAP[d] for d in program.get("excludedWeekDays", []) if d in WEEKDAY_MAP}
+        for i in range(days_ahead):
+            check_date = from_date + timedelta(days=i)
+            day_num = check_date.day
+            is_odd  = day_num % 2 == 1
+            if program_type == PROGRAM_TYPE_ODD and not is_odd:
+                continue
+            if program_type == PROGRAM_TYPE_EVEN and is_odd:
+                continue
+            if check_date.weekday() in excluded_days:
+                continue
+            events.append(_make_event(check_date, h, m, duration, tz, summary))
+
+    elif program_type == PROGRAM_TYPE_CYCLIC:
+        skip_days = max(1, program.get("skipDays", 1))
+        # Use nextCyclicalStartDate as anchor if available
+        next_start_str = program.get("nextCyclicalStartDate")
+        if next_start_str:
+            try:
+                anchor = datetime.fromisoformat(next_start_str.split("T")[0]).date()
+            except Exception:
+                anchor = from_date
+        else:
+            anchor = from_date
+
+        # Find first occurrence >= from_date
+        if anchor < from_date:
+            delta = (from_date - anchor).days
+            steps = (delta + skip_days - 1) // skip_days
+            anchor = anchor + timedelta(days=steps * skip_days)
+
+        check_date = anchor
+        while (check_date - from_date).days < days_ahead:
+            events.append(_make_event(check_date, h, m, duration, tz, summary))
+            check_date += timedelta(days=skip_days)
 
     return events
+
+
+def _make_event(
+    day: date,
+    h: int,
+    m: int,
+    duration: timedelta,
+    tz: zoneinfo.ZoneInfo,
+    summary: str,
+) -> CalendarEvent:
+    """Create a CalendarEvent for a given day and time."""
+    start_dt = datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+    return CalendarEvent(start=start_dt, end=start_dt + duration, summary=summary)
 
 
 class RainBirdCalendar(CalendarEntity):
@@ -86,10 +141,12 @@ class RainBirdCalendar(CalendarEntity):
         coordinator: RainBirdProgramCoordinator,
         config_coordinator: RainBirdConfigCoordinator,
         program: dict,
+        tz: zoneinfo.ZoneInfo,
     ) -> None:
         self._coordinator = coordinator
         self._config_coordinator = config_coordinator
         self._program_id = program["id"]
+        self._tz = tz
         satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
@@ -104,7 +161,7 @@ class RainBirdCalendar(CalendarEntity):
             identifiers={(DOMAIN, str(self._satellite_id))},
             name=self._satellite_name,
             manufacturer="Rain Bird",
-            model="ESP-TM2",
+            model=satellite.get("model", "Rain Bird IQ4"),
             sw_version=satellite.get("version"),
         )
 
@@ -148,13 +205,13 @@ class RainBirdCalendar(CalendarEntity):
     def event(self) -> CalendarEvent | None:
         """Return the next upcoming irrigation event."""
         program = self._get_program()
-        if not program.get("weekDays") or not program.get("startTime"):
+        if not program.get("startTime"):
             return None
         events = _get_next_occurrences(
-            program["weekDays"],
-            program["startTime"],
+            program,
             self._total_minutes(program),
             date.today(),
+            self._tz,
             days_ahead=7,
         )
         return events[0] if events else None
@@ -167,15 +224,15 @@ class RainBirdCalendar(CalendarEntity):
     ) -> list[CalendarEvent]:
         """Return all irrigation events between start_date and end_date."""
         program = self._get_program()
-        if not program.get("weekDays") or not program.get("startTime"):
+        if not program.get("startTime"):
             return []
 
         days_ahead = (end_date.date() - start_date.date()).days + 1
         all_events = _get_next_occurrences(
-            program["weekDays"],
-            program["startTime"],
+            program,
             self._total_minutes(program),
             start_date.date(),
+            self._tz,
             days_ahead=days_ahead,
         )
 
