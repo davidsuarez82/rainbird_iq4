@@ -309,8 +309,11 @@ class RainBirdProgramSensor(SensorEntity):
             if excluded:
                 attrs["excluded_days"] = excluded
         elif program_type == PROGRAM_TYPE_CYCLIC:
-            attrs["skip_days"]               = program.get("skipDays", 1)
-            attrs["next_run"]                = program.get("nextCyclicalStartDate")
+            attrs["skip_days"] = program.get("skipDays", 1)
+            attrs["next_run"]  = program.get("nextCyclicalStartDate")
+            excluded = program.get("excludedWeekDays", [])
+            if excluded:
+                attrs["excluded_days"] = excluded
 
         return attrs
 
