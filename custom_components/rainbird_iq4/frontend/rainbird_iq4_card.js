@@ -234,11 +234,16 @@ class RainBirdIQ4Card extends HTMLElement {
           border: 1px solid color-mix(in srgb, var(--divider-color) 70%, transparent);
           border-radius: 999px;
           color: var(--secondary-text-color);
+          cursor: pointer;
           display: inline-flex;
           font-size: 12px;
           gap: 6px;
           min-height: 26px;
           padding: 0 10px;
+        }
+
+        .pill:hover {
+          filter: brightness(0.95);
         }
 
         .pill ha-icon {
@@ -300,6 +305,7 @@ class RainBirdIQ4Card extends HTMLElement {
           background: color-mix(in srgb, var(--secondary-background-color) 76%, transparent);
           border: 1px solid color-mix(in srgb, var(--divider-color) 72%, transparent);
           border-radius: 8px;
+          cursor: pointer;
           display: grid;
           min-width: 0;
           padding: 12px;
@@ -698,6 +704,7 @@ class RainBirdIQ4Card extends HTMLElement {
         icon: controller.connected ? "mdi:cloud-check" : "mdi:cloud-alert",
         tone: controller.connected ? "ok" : "bad",
         text: controller.connected ? `${controller.name} online` : `${controller.name} offline`,
+        entityId: controller.connectedState?.entity_id,
       });
     }
     if (controller.modeState && !this._isUnknown(controller.modeState.state)) {
@@ -705,6 +712,7 @@ class RainBirdIQ4Card extends HTMLElement {
         icon: "mdi:controller",
         tone: "",
         text: `Mode: ${controller.modeState.state}`,
+        entityId: controller.modeState?.entity_id,
       });
     }
     if (controller.rainDelayState && !this._isUnknown(controller.rainDelayState.state)) {
@@ -713,6 +721,7 @@ class RainBirdIQ4Card extends HTMLElement {
         icon: "mdi:weather-rainy",
         tone: days > 0 ? "warn" : "",
         text: days > 0 ? `Rain pause ${days}d` : "No rain pause",
+        entityId: controller.rainDelayState?.entity_id,
       });
     }
     if (controller.forecastState) {
@@ -720,16 +729,17 @@ class RainBirdIQ4Card extends HTMLElement {
         icon: "mdi:weather-partly-rainy",
         tone: controller.forecastState.state === "on" ? "ok" : "",
         text: controller.forecastState.state === "on" ? "Forecast delay on" : "Forecast delay off",
+        entityId: controller.forecastState?.entity_id,
       });
     }
 
     const alarms = this._stateNumber(controller.alarmsState);
     const warnings = this._stateNumber(controller.warningsState);
     if (alarms > 0) {
-      pills.push({ icon: "mdi:alarm-light", tone: "bad", text: `${alarms} alarms` });
+      pills.push({ icon: "mdi:alarm-light", tone: "bad", text: `${alarms} alarms`, entityId: controller.alarmsState?.entity_id });
     }
     if (warnings > 0) {
-      pills.push({ icon: "mdi:alert", tone: "warn", text: `${warnings} warnings` });
+      pills.push({ icon: "mdi:alert", tone: "warn", text: `${warnings} warnings`, entityId: controller.warningsState?.entity_id });
     }
     if (alarms === 0 && warnings === 0) {
       pills.push({ icon: "mdi:check-circle-outline", tone: "ok", text: "No alerts" });
@@ -741,7 +751,7 @@ class RainBirdIQ4Card extends HTMLElement {
         ${pills
           .map(
             (pill) => `
-              <span class="pill ${this._escape(pill.tone)}">
+              <span class="pill ${this._escape(pill.tone)}" ${pill.entityId ? `data-more-info="${this._escape(pill.entityId)}"` : ""}>
                 <ha-icon icon="${this._escape(pill.icon)}"></ha-icon>
                 ${this._escape(pill.text)}
               </span>
@@ -840,7 +850,7 @@ class RainBirdIQ4Card extends HTMLElement {
     `;
 
     return `
-      <div class="station ${running ? "is-running" : ""} ${paused ? "is-paused" : ""} ${starting || stopping ? "is-pending" : ""}">
+      <div class="station ${running ? "is-running" : ""} ${paused ? "is-paused" : ""} ${starting || stopping ? "is-pending" : ""}" data-more-info="${this._escape(station.entityId)}">
         <div class="station-main">
           <div class="terminal">${this._escape(station.terminal || "-")}</div>
           <div class="station-body">
@@ -872,14 +882,36 @@ class RainBirdIQ4Card extends HTMLElement {
     `;
   }
 
+  // PATCH 1: support Cyclic / Odd / Even schedule types (v1.0.3 attributes)
   _renderProgram(program) {
     const attrs = program.attributes || {};
     const scheduled = program.state === "scheduled";
+    const scheduleType = attrs.schedule_type || "weekly";
+
+    const excluded = Array.isArray(attrs.excluded_days)
+      ? attrs.excluded_days.join(", ")
+      : attrs.excluded_days || "";
+
+    let scheduleLine = null;
+    if (scheduleType.startsWith("every ") && attrs.skip_days) {
+      scheduleLine = excluded
+        ? `Every ${attrs.skip_days} days (excl. ${excluded})`
+        : `Every ${attrs.skip_days} days`;
+    } else if (scheduleType === "odd days") {
+      scheduleLine = excluded ? `Odd days (excl. ${excluded})` : "Odd days";
+    } else if (scheduleType === "even days") {
+      scheduleLine = excluded ? `Even days (excl. ${excluded})` : "Even days";
+    } else {
+      // weekly (default)
+      scheduleLine = Array.isArray(attrs.week_days) && attrs.week_days.length
+        ? this._formatWeekDays(attrs.week_days)
+        : null;
+    }
+
     const details = [
       attrs.start_time ? `Starts ${attrs.start_time}` : null,
-      Array.isArray(attrs.week_days) && attrs.week_days.length
-        ? this._formatWeekDays(attrs.week_days)
-        : null,
+      scheduleLine,
+      attrs.next_run ? `Next: ${this._formatNextRun(attrs.next_run)}` : null,
       Number(attrs.steps || 0) > 0 ? `${attrs.steps} step${Number(attrs.steps) === 1 ? "" : "s"}` : null,
       attrs.weather_adjust ? `${attrs.weather_adjust} adjust` : null,
       attrs.seasonal_adjust !== undefined ? `${attrs.seasonal_adjust}%` : null,
@@ -888,7 +920,7 @@ class RainBirdIQ4Card extends HTMLElement {
       .join("<span>•</span>");
 
     return `
-      <div class="program">
+      <div class="program" data-more-info="${this._escape(program.entity_id)}">
         <div>
           <div class="program-name">${this._escape(this._programName(program))}</div>
           <div class="meta">${details || "No schedule details"}</div>
@@ -966,6 +998,15 @@ class RainBirdIQ4Card extends HTMLElement {
       button.addEventListener("click", () => {
         const station = this._stationByKey(button.dataset.stop);
         if (station) this._stopStation(station);
+      });
+    });
+
+    this.shadowRoot.querySelectorAll("[data-more-info]").forEach((el) => {
+      el.addEventListener("click", (event) => {
+        // Don't fire more-info if clicking a button or input inside the element
+        if (event.target.closest("button, input, select, label")) return;
+        const entityId = el.dataset.moreInfo;
+        if (entityId) this._fireMoreInfo(entityId);
       });
     });
   }
@@ -1197,7 +1238,10 @@ class RainBirdIQ4Card extends HTMLElement {
       .filter(Boolean);
 
     if (sensorStations.length) {
-      return sensorStations.sort((left, right) => this._stationSort(left, right));
+      const filtered = this._config.hide_inactive_stations
+        ? sensorStations.filter((s) => s.attributes?.is_active !== false)
+        : sensorStations;
+      return filtered.sort((left, right) => this._stationSort(left, right));
     }
 
     return Object.entries(this._hass.states)
@@ -1340,21 +1384,61 @@ class RainBirdIQ4Card extends HTMLElement {
   _programsForController(id) {
     return Object.values(this._hass.states)
       .filter((state) => {
-        return (
-          state.entity_id?.startsWith(`sensor.${id}_program_`) &&
-          state.entity_id.endsWith("_status")
-        );
+        if (!state.entity_id?.startsWith(`sensor.${id}_program_`)) return false;
+        if (!state.entity_id.endsWith("_status")) return false;
+        if (this._config.hide_inactive_programs && state.state !== "scheduled") return false;
+        return true;
       })
       .sort((left, right) => this._programName(left).localeCompare(this._programName(right)));
   }
 
+  // PATCH 2: robust name cleaning — try all known controller prefixes (longest first),
+  // then fall back to the resolved controller label, to handle area-prefixed entity IDs.
   _programName(program) {
     const name = program.attributes?.friendly_name || program.entity_id || "Program";
-    const controller = this._labelFromControllerId(this._controllerIdForSensor(program.entity_id || ""));
-    return name
-      .replace(new RegExp(`^${this._escapeRegExp(controller)}\\s+`, "i"), "")
-      .replace(/\s+Status$/i, "")
-      .trim();
+    const entityId = program.entity_id || "";
+    const controllerId = this._controllerIdForSensor(entityId);
+
+    // Try stripping any known controller prefix (snake_case → Title Case variants)
+    const cleaned = this._stripControllerPrefix(name, controllerId);
+    return cleaned.replace(/\s+Status$/i, "").trim();
+  }
+
+  // PATCH 2 (continued): shared helper used by both _cleanStationName and _programName
+  _stripControllerPrefix(name, controllerId) {
+    // Build candidate labels to try, longest first
+    const candidates = [];
+
+    // 1. The resolved controller label (e.g. "ESP-TM2" from friendly name)
+    const connectedState = this._entity(`binary_sensor.${controllerId}_connected`);
+    if (connectedState?.attributes?.friendly_name) {
+      const label = connectedState.attributes.friendly_name
+        .replace(/\s+(Connected|Connection)$/i, "")
+        .trim();
+      if (label) candidates.push(label);
+    }
+
+    // 2. All known controller prefixes converted to Title Case labels
+    const prefixes = this._controllerPrefixes();
+    prefixes
+      .sort((a, b) => b.length - a.length)
+      .forEach((prefix) => candidates.push(this._labelFromControllerId(prefix)));
+
+    // 3. The controllerId itself as a label
+    candidates.push(this._labelFromControllerId(controllerId));
+
+    // Try each candidate as a prefix to strip
+    for (const candidate of candidates) {
+      const escaped = this._escapeRegExp(candidate);
+      const stripped = String(name).replace(new RegExp(`^${escaped}\\s+`, "i"), "").trim();
+      if (stripped && stripped !== name) return stripped;
+    }
+
+    return String(name).trim();
+  }
+
+  _cleanStationName(name, controllerId) {
+    return this._stripControllerPrefix(name, controllerId);
   }
 
   _legacyConnection(controllerId) {
@@ -1579,18 +1663,29 @@ class RainBirdIQ4Card extends HTMLElement {
     });
   }
 
+
+  _formatNextRun(value) {
+    if (!value) return "";
+    const next = new Date(value);
+    if (isNaN(next.getTime())) return value;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    next.setHours(0, 0, 0, 0);
+    const days = Math.round((next - today) / 86400000);
+    if (days === 0) return "Today";
+    if (days === 1) return "Tomorrow";
+    if (days > 1) return `in ${days} days`;
+    return value;
+  }
+
   _formatWeekDays(days) {
     if (!Array.isArray(days) || !days.length) return "";
     if (days.length === 7) return "Every day";
     return days.join(", ");
   }
 
-  _cleanStationName(name, controllerId) {
-    const label = this._labelFromControllerId(controllerId);
-    return String(name)
-      .replace(new RegExp(`^${this._escapeRegExp(label)}\\s+`, "i"), "")
-      .trim();
-  }
+  // PATCH 2 (continued): _cleanStationName now delegates to _stripControllerPrefix
+  // (defined above, replacing the old single-label approach)
 
   _labelFromControllerId(id) {
     const text = String(id || "")
@@ -1646,6 +1741,9 @@ class RainBirdIQ4Card extends HTMLElement {
           program.attributes?.weather_adjust,
           program.attributes?.seasonal_adjust,
           (program.attributes?.week_days || []).join(","),
+          program.attributes?.schedule_type,
+          program.attributes?.skip_days,
+          program.attributes?.next_run,
         ]),
       ]),
     });
@@ -1668,6 +1766,15 @@ class RainBirdIQ4Card extends HTMLElement {
       }
       this._render(true);
     }, 250);
+  }
+
+  _fireMoreInfo(entityId) {
+    if (!entityId) return;
+    this.dispatchEvent(new CustomEvent("hass-more-info", {
+      bubbles: true,
+      composed: true,
+      detail: { entityId },
+    }));
   }
 
   _escapeRegExp(value) {
@@ -1770,6 +1877,14 @@ class RainBirdIQ4CardEditor extends HTMLElement {
           <input data-key="show_programs" type="checkbox" ${this._config.show_programs !== false ? "checked" : ""}>
           Show program schedule
         </label>
+        <label class="check">
+          <input data-key="hide_inactive_programs" type="checkbox" ${this._config.hide_inactive_programs ? "checked" : ""}>
+          Hide inactive programs (not scheduled / disabled)
+        </label>
+        <label class="check">
+          <input data-key="hide_inactive_stations" type="checkbox" ${this._config.hide_inactive_stations ? "checked" : ""}>
+          Hide inactive stations (not assigned to any program)
+        </label>
         <div>
           <label>Station entities, one per line. Leave empty for auto-discovery.</label>
           <textarea data-key="entities">${this._escape(entities)}</textarea>
@@ -1784,7 +1899,7 @@ class RainBirdIQ4CardEditor extends HTMLElement {
       input.addEventListener("change", () => {
         const key = input.dataset.key;
         const config = { ...this._config };
-        if (key === "auto" || key === "show_programs") {
+        if (key === "auto" || key === "show_programs" || key === "hide_inactive_programs" || key === "hide_inactive_stations") {
           config[key] = input.checked;
         } else if (key === "default_duration") {
           const value = input.value === "" ? undefined : Number(input.value);

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -51,6 +51,78 @@ def _parse_excluded_weekdays(hybrid_str: str) -> list[str]:
     if not hybrid_str or len(hybrid_str) != 7:
         return []
     return [WEEKDAY_NAMES[i] for i, bit in enumerate(hybrid_str) if bit == "0"]
+
+
+# Map day name to Python weekday (Monday=0)
+_WEEKDAY_MAP = {
+    "Sun": 6, "Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5,
+}
+
+
+def _calculate_next_run(
+    program_type: int,
+    start_time_str: str | None,
+    week_days: list[str],
+    excluded_week_days: list[str],
+    skip_days: int,
+    next_cyclical_start: str | None,
+) -> str | None:
+    """Calculate the next run date for a program, accounting for start time vs now."""
+    now = datetime.now()
+    today = now.date()
+
+    # Parse start time to know if today's run has already passed
+    start_hour, start_min = 0, 0
+    if start_time_str:
+        try:
+            start_hour, start_min = map(int, start_time_str.split(":"))
+        except Exception:
+            pass
+    run_time_passed_today = now.hour > start_hour or (
+        now.hour == start_hour and now.minute >= start_min
+    )
+    # First candidate: today if run hasn't passed yet, else tomorrow
+    first_candidate = today + timedelta(days=1) if run_time_passed_today else today
+
+    if program_type == PROGRAM_TYPE_WEEKLY:
+        if not week_days:
+            return None
+        target_weekdays = {_WEEKDAY_MAP[d] for d in week_days if d in _WEEKDAY_MAP}
+        for i in range(14):
+            candidate = first_candidate + timedelta(days=i)
+            if candidate.weekday() in target_weekdays:
+                return candidate.isoformat()
+        return None
+
+    elif program_type == PROGRAM_TYPE_ODD:
+        excluded = {_WEEKDAY_MAP[d] for d in excluded_week_days if d in _WEEKDAY_MAP}
+        for i in range(14):
+            candidate = first_candidate + timedelta(days=i)
+            if candidate.day % 2 == 1 and candidate.weekday() not in excluded:
+                return candidate.isoformat()
+        return None
+
+    elif program_type == PROGRAM_TYPE_EVEN:
+        excluded = {_WEEKDAY_MAP[d] for d in excluded_week_days if d in _WEEKDAY_MAP}
+        for i in range(14):
+            candidate = first_candidate + timedelta(days=i)
+            if candidate.day % 2 == 0 and candidate.weekday() not in excluded:
+                return candidate.isoformat()
+        return None
+
+    elif program_type == PROGRAM_TYPE_CYCLIC:
+        # Use API-provided nextCyclicalStartDate but adjust if today's run already passed
+        if not next_cyclical_start:
+            return None
+        try:
+            api_date = date.fromisoformat(next_cyclical_start.split("T")[0])
+        except Exception:
+            return None
+        if api_date == today and run_time_passed_today:
+            return (today + timedelta(days=skip_days)).isoformat()
+        return api_date.isoformat()
+
+    return None
 
 
 def _process_event_logs(event_logs: list, stations: list) -> dict:
@@ -359,23 +431,35 @@ class RainBirdProgramCoordinator(DataUpdateCoordinator):
         # Enrich programs
         programs_data = []
         for p in programs:
-            et_type      = p.get("etAdjustType", 6)
-            program_type = p.get("type", PROGRAM_TYPE_WEEKLY)
+            et_type          = p.get("etAdjustType", 6)
+            program_type     = p.get("type", PROGRAM_TYPE_WEEKLY)
+            start_time       = _parse_start_time(p.get("startTime"))
+            week_days        = _parse_weekdays(p.get("weekDays", ""))
+            excluded_days    = _parse_excluded_weekdays(p.get("hybridWeekDays", ""))
+            skip_days        = p.get("skipDays", 1)
+            next_run = _calculate_next_run(
+                program_type=program_type,
+                start_time_str=start_time,
+                week_days=week_days,
+                excluded_week_days=excluded_days,
+                skip_days=skip_days,
+                next_cyclical_start=p.get("nextCyclicalStartDate"),
+            )
             programs_data.append({
-                "id":                     p.get("id"),
-                "name":                   p.get("name"),
-                "shortName":              p.get("shortName"),
-                "isEnabled":              p.get("isEnabled"),
-                "startTime":              _parse_start_time(p.get("startTime")),
-                "programType":            program_type,
-                "weekDays":               _parse_weekdays(p.get("weekDays", "")),
-                "excludedWeekDays":       _parse_excluded_weekdays(p.get("hybridWeekDays", "")),
-                "skipDays":               p.get("skipDays", 1),
-                "nextCyclicalStartDate":  p.get("nextCyclicalStartDate"),
-                "adjust":                 p.get("programAdjust"),
-                "adjustedValue":          p.get("tempProgramAdjust") if et_type == 7 else p.get("programAdjust"),
-                "steps":                  p.get("numberOfProgramSteps"),
-                "etAdjustType":           et_type,
+                "id":               p.get("id"),
+                "name":             p.get("name"),
+                "shortName":        p.get("shortName"),
+                "isEnabled":        p.get("isEnabled"),
+                "startTime":        start_time,
+                "programType":      program_type,
+                "weekDays":         week_days,
+                "excludedWeekDays": excluded_days,
+                "skipDays":         skip_days,
+                "nextRun":          next_run,
+                "adjust":           p.get("programAdjust"),
+                "adjustedValue":    p.get("tempProgramAdjust") if et_type == 7 else p.get("programAdjust"),
+                "steps":            p.get("numberOfProgramSteps"),
+                "etAdjustType":     et_type,
             })
 
         return {

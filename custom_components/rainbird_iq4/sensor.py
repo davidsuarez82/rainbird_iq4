@@ -38,7 +38,7 @@ async def async_setup_entry(
 
     # Real-time sensors (30s polling)
     for station in coordinator.data.get("stations", []):
-        entities.append(RainBirdStationSensor(coordinator, config_coordinator, station))
+        entities.append(RainBirdStationSensor(coordinator, config_coordinator, program_coordinator, station))
 
     # Program sensors (1h polling)
     for program in program_coordinator.data.get("programs", []):
@@ -154,10 +154,12 @@ class RainBirdStationSensor(SensorEntity):
         self,
         coordinator: RainBirdCoordinator,
         config_coordinator: RainBirdConfigCoordinator,
+        program_coordinator: RainBirdProgramCoordinator,
         station: dict,
     ) -> None:
         self._coordinator = coordinator
         self._config_coordinator = config_coordinator
+        self._program_coordinator = program_coordinator
         self._station_id = station["id"]
         satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
         self._satellite_id = coordinator.satellite_id
@@ -201,6 +203,15 @@ class RainBirdStationSensor(SensorEntity):
     def native_value(self) -> str:
         return self.state
 
+    def _is_active(self) -> bool:
+        """Return True if this station is assigned to at least one program."""
+        if not self._program_coordinator.data:
+            return True  # assume active if data not yet available
+        for s in self._program_coordinator.data.get("stations", []):
+            if s["id"] == self._station_id and s.get("programs"):
+                return True
+        return False
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         station = self._get_station()
@@ -209,6 +220,7 @@ class RainBirdStationSensor(SensorEntity):
             "remaining":          station.get("remaining"),
             "last_run":           station.get("lastRun"),
             "last_run_completed": station.get("lastRunCompleted"),
+            "is_active":          self._is_active(),
         }
 
     async def async_added_to_hass(self) -> None:
@@ -218,6 +230,9 @@ class RainBirdStationSensor(SensorEntity):
         )
         self.async_on_remove(
             self._config_coordinator.async_add_listener(self.async_write_ha_state)
+        )
+        self.async_on_remove(
+            self._program_coordinator.async_add_listener(self.async_write_ha_state)
         )
 
     @property
@@ -302,6 +317,11 @@ class RainBirdProgramSensor(SensorEntity):
             "seasonal_adjust": program.get("adjustedValue"),
         }
 
+        # next_run is calculated for all program types in the coordinator
+        next_run = program.get("nextRun")
+        if next_run:
+            attrs["next_run"] = next_run
+
         if program_type == PROGRAM_TYPE_WEEKLY:
             attrs["week_days"] = program.get("weekDays", [])
         elif program_type in (PROGRAM_TYPE_ODD, PROGRAM_TYPE_EVEN):
@@ -310,7 +330,6 @@ class RainBirdProgramSensor(SensorEntity):
                 attrs["excluded_days"] = excluded
         elif program_type == PROGRAM_TYPE_CYCLIC:
             attrs["skip_days"] = program.get("skipDays", 1)
-            attrs["next_run"]  = program.get("nextCyclicalStartDate")
             excluded = program.get("excludedWeekDays", [])
             if excluded:
                 attrs["excluded_days"] = excluded

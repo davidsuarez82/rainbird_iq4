@@ -29,32 +29,32 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-async def _validate_credentials(
+async def _get_satellites(
     hass: HomeAssistant, username: str, password: str
-) -> dict[str, Any]:
-    """Validate credentials and discover satellite and company IDs."""
+) -> list[dict]:
+    """Validate credentials and return list of satellites."""
     auth = RainBirdAuth(username, password)
     api = RainBirdAPI(auth)
 
     satellites = await hass.async_add_executor_job(
-        lambda: api._get("Satellite/GetSatelliteList", {"includeInvisibleToCurrentUser": False})
+        api.get_satellite_list
     )
 
     if not satellites:
         raise ValueError("No controllers found for this account")
 
-    satellite = satellites[0]
-    return {
-        "satellite_id": satellite["id"],
-        "company_id":   satellite["companyId"],
-        "name":         satellite.get("name", "Rain Bird IQ4"),
-    }
+    return satellites
 
 
 class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle the Rain Bird IQ4 config flow."""
 
     VERSION = 1
+
+    def __init__(self) -> None:
+        self._username: str = ""
+        self._password: str = ""
+        self._satellites: list[dict] = []
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -63,11 +63,13 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            username = user_input[CONF_USERNAME]
-            password = user_input[CONF_PASSWORD]
+            self._username = user_input[CONF_USERNAME]
+            self._password = user_input[CONF_PASSWORD]
 
             try:
-                info = await _validate_credentials(self.hass, username, password)
+                self._satellites = await _get_satellites(
+                    self.hass, self._username, self._password
+                )
             except ValueError as err:
                 errors["base"] = "no_controllers"
                 _LOGGER.error("No controllers found: %s", err)
@@ -78,18 +80,11 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "unknown"
                 _LOGGER.exception("Unexpected error: %s", err)
             else:
-                await self.async_set_unique_id(str(info["satellite_id"]))
-                self._abort_if_unique_id_configured()
-
-                return self.async_create_entry(
-                    title=info["name"],
-                    data={
-                        CONF_USERNAME:     username,
-                        CONF_PASSWORD:     password,
-                        CONF_SATELLITE_ID: info["satellite_id"],
-                        CONF_COMPANY_ID:   info["company_id"],
-                    },
-                )
+                if len(self._satellites) == 1:
+                    # Single controller — skip selector
+                    return await self._async_create_entry(self._satellites[0])
+                # Multiple controllers — show selector
+                return await self.async_step_select_controller()
 
         return self.async_show_form(
             step_id="user",
@@ -98,6 +93,45 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PASSWORD): str,
             }),
             errors=errors,
+        )
+
+    async def async_step_select_controller(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle controller selection when multiple controllers are found."""
+        if user_input is not None:
+            satellite_id = int(user_input["satellite_id"])
+            satellite = next(
+                (s for s in self._satellites if s["id"] == satellite_id), None
+            )
+            if satellite:
+                return await self._async_create_entry(satellite)
+
+        options = {
+            str(s["id"]): s.get("name", f"Controller {s['id']}")
+            for s in self._satellites
+        }
+
+        return self.async_show_form(
+            step_id="select_controller",
+            data_schema=vol.Schema({
+                vol.Required("satellite_id"): vol.In(options),
+            }),
+        )
+
+    async def _async_create_entry(self, satellite: dict) -> FlowResult:
+        """Create a config entry for the given satellite."""
+        await self.async_set_unique_id(str(satellite["id"]))
+        self._abort_if_unique_id_configured()
+
+        return self.async_create_entry(
+            title=satellite.get("name", "Rain Bird IQ4"),
+            data={
+                CONF_USERNAME:     self._username,
+                CONF_PASSWORD:     self._password,
+                CONF_SATELLITE_ID: satellite["id"],
+                CONF_COMPANY_ID:   satellite["companyId"],
+            },
         )
 
     @staticmethod
