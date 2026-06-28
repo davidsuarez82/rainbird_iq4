@@ -5,7 +5,7 @@ import datetime
 import logging
 from typing import Any
 
-import requests
+from curl_cffi import requests as cf_requests
 
 from .auth import RainBirdAuth
 from .const import API_BASE
@@ -27,31 +27,31 @@ class RainBirdAPI:
     def _get(self, path: str, params: dict | None = None) -> Any:
         """Perform a GET request, retrying once on 401."""
         url = f"{API_BASE}/{path}"
-        r = requests.get(url, params=params, headers=self._auth.get_headers(), timeout=30)
+        r = cf_requests.get(url, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
         if r.status_code == 401:
             _LOGGER.debug("Token rejected, refreshing and retrying")
             self._auth.invalidate()
-            r = requests.get(url, params=params, headers=self._auth.get_headers(), timeout=30)
+            r = cf_requests.get(url, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
         r.raise_for_status()
         return r.json() if r.text.strip() else None
 
     def _post(self, path: str, json: Any = None, params: dict | None = None) -> Any:
         """Perform a POST request, retrying once on 401."""
         url = f"{API_BASE}/{path}"
-        r = requests.post(url, json=json, params=params, headers=self._auth.get_headers(), timeout=30)
+        r = cf_requests.post(url, json=json, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
         if r.status_code == 401:
             self._auth.invalidate()
-            r = requests.post(url, json=json, params=params, headers=self._auth.get_headers(), timeout=30)
+            r = cf_requests.post(url, json=json, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
         r.raise_for_status()
         return r.json() if r.text.strip() else None
 
     def _patch(self, path: str, json: Any = None) -> Any:
         """Perform a PATCH request, retrying once on 401."""
         url = f"{API_BASE}/{path}"
-        r = requests.patch(url, json=json, headers=self._auth.get_headers(), timeout=30)
+        r = cf_requests.patch(url, json=json, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
         if r.status_code == 401:
             self._auth.invalidate()
-            r = requests.patch(url, json=json, headers=self._auth.get_headers(), timeout=30)
+            r = cf_requests.patch(url, json=json, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
         r.raise_for_status()
         return r.json() if r.text.strip() else None
 
@@ -62,7 +62,7 @@ class RainBirdAPI:
         Returns None if the endpoint is not available (e.g. ESP-ME3 returns 403)."""
         try:
             return self._get("Satellite/GetSatellite", {"satelliteId": satellite_id})
-        except requests.HTTPError as e:
+        except cf_requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 403:
                 _LOGGER.debug(
                     "GetSatellite returned 403 for satellite %s, will use fallback",
@@ -258,7 +258,7 @@ class RainBirdAPI:
                     "includeAcknowledgedWarnings": "true",
                 },
             ) or []
-        except requests.HTTPError as e:
+        except cf_requests.HTTPError as e:
             if e.response is not None and e.response.status_code == 403:
                 _LOGGER.debug(
                     "EventLog returned 403 for satellite %s, running zone detection unavailable",

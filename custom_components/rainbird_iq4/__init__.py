@@ -48,17 +48,25 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     _FRONTEND_REGISTERED = True
 
 
-def _resolve_station(hass: HomeAssistant, coordinator: RainBirdCoordinator, entity_id: str) -> int:
-    """Resolve a station sensor entity_id to its Rain Bird station_id."""
+def _resolve_station(hass: HomeAssistant, entity_id: str) -> tuple[int, Any, Any]:
+    """Resolve a station sensor entity_id to its Rain Bird station_id, api and coordinator.
+    
+    Searches across all configured Rain Bird entries to find the correct one.
+    Returns (station_id, api, realtime_coordinator).
+    """
     state = hass.states.get(entity_id)
     if not state:
         raise ServiceValidationError(f"Entity {entity_id} not found")
     friendly_name = state.attributes.get("friendly_name", "")
-    config_data = hass.data[DOMAIN][coordinator.config_entry_id]["config"].data
-    satellite_name = config_data.get("satellite", {}).get("name", "") if config_data else ""
-    for station in coordinator.data.get("stations", []):
-        if friendly_name == f"{satellite_name} {station['name']}":
-            return station["id"]
+    
+    for entry_id, coordinators in hass.data[DOMAIN].items():
+        realtime = coordinators["realtime"]
+        config   = coordinators["config"]
+        satellite_name = config.data.get("satellite", {}).get("name", "") if config.data else ""
+        for station in realtime.data.get("stations", []):
+            if friendly_name == f"{satellite_name} {station['name']}":
+                return station["id"], coordinators["api"], realtime
+    
     raise ServiceValidationError(
         f"Could not match entity {entity_id} to a station. "
         f"Please select a Station sensor (e.g. ESP-TM2 Station 001)."
@@ -112,6 +120,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "realtime": coordinator,
         "config":   config_coordinator,
         "program":  program_coordinator,
+        "api":      api,
     }
 
     await _async_register_frontend(hass)
@@ -121,39 +130,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # ── Service handlers ──────────────────────────────────────────────────────
 
     async def handle_start_zone(call: ServiceCall) -> None:
-        entity_id  = call.data["station_entity"]
-        duration   = call.data["duration"]
-        state = hass.states.get(entity_id)
-        if not state:
-            raise ServiceValidationError(f"Entity {entity_id} not found")
-        friendly_name  = state.attributes.get("friendly_name", "")
-        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
-        station_id = None
-        for station in coordinator.data.get("stations", []):
-            if friendly_name == f"{satellite_name} {station['name']}":
-                station_id = station["id"]
-                break
-        if not station_id:
-            raise ServiceValidationError(f"Could not match entity {entity_id} to a station.")
-        await hass.async_add_executor_job(api.start_station, station_id, duration * 60)
-        await coordinator.async_request_refresh()
+        entity_id = call.data["station_entity"]
+        duration  = call.data["duration"]
+        station_id, entry_api, entry_coordinator = _resolve_station(hass, entity_id)
+        await hass.async_add_executor_job(entry_api.start_station, station_id, duration * 60)
+        await entry_coordinator.async_request_refresh()
 
     async def handle_stop_zone(call: ServiceCall) -> None:
         entity_id = call.data["station_entity"]
-        state = hass.states.get(entity_id)
-        if not state:
-            raise ServiceValidationError(f"Entity {entity_id} not found")
-        friendly_name  = state.attributes.get("friendly_name", "")
-        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
-        station_id = None
-        for station in coordinator.data.get("stations", []):
-            if friendly_name == f"{satellite_name} {station['name']}":
-                station_id = station["id"]
-                break
-        if not station_id:
-            raise ServiceValidationError(f"Could not match entity {entity_id} to a station.")
-        await hass.async_add_executor_job(api.stop_station, station_id)
-        await coordinator.async_request_refresh()
+        station_id, entry_api, entry_coordinator = _resolve_station(hass, entity_id)
+        await hass.async_add_executor_job(entry_api.stop_station, station_id)
+        await entry_coordinator.async_request_refresh()
 
     async def handle_set_rain_delay(call: ServiceCall) -> None:
         await hass.async_add_executor_job(api.set_rain_delay, satellite_id, call.data["days"])
