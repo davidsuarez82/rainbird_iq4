@@ -31,6 +31,7 @@ A Home Assistant custom integration for **Rain Bird IQ4** cloud-connected irriga
 - **Manual refresh button** — force immediate update of all data, rate-limited to avoid excessive cloud requests
 - **Optional Lovelace card** — compact zone controls with per-zone durations and optimistic feedback
 - **Fault tolerance** — tolerates up to 3 consecutive API errors before marking entities unavailable
+- **AWS WAF bypass** — all API calls use `curl_cffi` to impersonate a browser, ensuring compatibility across all controller types
 
 ---
 
@@ -184,7 +185,6 @@ All zone and program actions use entity selectors filtered to Rain Bird IQ4 enti
 - **Cloud-dependent** — The integration requires an active internet connection and Rain Bird IQ4 cloud service. Local control is not supported.
 - **Token-based auth** — Authentication tokens are cached on disk and refreshed automatically every ~2 hours. A restart may briefly show entities as unavailable while the token is refreshed.
 - **Timestamps in local time** — Rain Bird event log timestamps are in controller local time, not UTC.
-- **ESP-ME3 zone control** — Manual start/stop of zones may not work on ESP-ME3 controllers depending on account configuration. Ensure the controller is fully set up on iq4.rainbird.com.
 
 ---
 
