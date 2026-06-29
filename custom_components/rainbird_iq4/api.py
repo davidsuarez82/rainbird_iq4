@@ -62,7 +62,7 @@ class RainBirdAPI:
         Returns None if the endpoint is not available (e.g. ESP-ME3 returns 403)."""
         try:
             return self._get("Satellite/GetSatellite", {"satelliteId": satellite_id})
-        except cf_requests.HTTPError as e:
+        except cf_requests.RequestsError as e:
             if e.response is not None and e.response.status_code == 403:
                 _LOGGER.debug(
                     "GetSatellite returned 403 for satellite %s, will use fallback",
@@ -258,7 +258,7 @@ class RainBirdAPI:
                     "includeAcknowledgedWarnings": "true",
                 },
             ) or []
-        except cf_requests.HTTPError as e:
+        except cf_requests.RequestsError as e:
             if e.response is not None and e.response.status_code == 403:
                 _LOGGER.debug(
                     "EventLog returned 403 for satellite %s, running zone detection unavailable",

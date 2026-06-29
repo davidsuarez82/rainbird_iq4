@@ -62,7 +62,9 @@ def _resolve_station(hass: HomeAssistant, entity_id: str) -> tuple[int, Any, Any
     for entry_id, coordinators in hass.data[DOMAIN].items():
         realtime = coordinators["realtime"]
         config   = coordinators["config"]
-        satellite_name = config.data.get("satellite", {}).get("name", "") if config.data else ""
+        if not realtime.data or not config.data:
+            continue
+        satellite_name = config.data.get("satellite", {}).get("name", "")
         for station in realtime.data.get("stations", []):
             if friendly_name == f"{satellite_name} {station['name']}":
                 return station["id"], coordinators["api"], realtime

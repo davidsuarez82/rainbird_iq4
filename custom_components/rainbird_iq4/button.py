@@ -54,5 +54,6 @@ class RainBirdRefreshButton(ButtonEntity):
     async def async_press(self) -> None:
         """Force refresh all coordinators."""
         _LOGGER.debug("Manual refresh triggered")
-        for coordinator in self._coordinators.values():
-            await coordinator.async_request_refresh()
+        for key, coordinator in self._coordinators.items():
+            if key in ("realtime", "config", "program"):
+                await coordinator.async_request_refresh()
