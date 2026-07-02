@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -11,7 +12,9 @@ from urllib.parse import quote
 
 from curl_cffi import requests as cf
 
-from .const import AUTH_BASE, CLIENT_ID, TOKEN_CACHE_PATH
+from homeassistant.core import HomeAssistant
+
+from .const import AUTH_BASE, CLIENT_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,46 +52,45 @@ def fetch_token(username: str, password: str) -> str:
     return_url_encoded = quote(return_url_raw, safe="")
     login_url = f"{AUTH_BASE}/Account/Login?ReturnUrl={return_url_encoded}"
 
-    session = cf.Session(impersonate="chrome")
+    with cf.Session(impersonate="chrome") as session:
+        # Step 1: load login page and extract CSRF token
+        r1 = session.get(login_url)
+        if r1.status_code != 200:
+            raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
 
-    # Step 1: load login page and extract CSRF token
-    r1 = session.get(login_url)
-    if r1.status_code != 200:
-        raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
+        match = re.search(
+            r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text
+        )
+        if not match:
+            raise RuntimeError("CSRF token not found in login page")
+        csrf = match.group(1)
 
-    match = re.search(
-        r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text
-    )
-    if not match:
-        raise RuntimeError("CSRF token not found in login page")
-    csrf = match.group(1)
+        # Step 2: submit credentials
+        r2 = session.post(
+            login_url,
+            data={
+                "Username": username,
+                "Password": password,
+                "ReturnUrl": return_url_raw,
+                "__RequestVerificationToken": csrf,
+            },
+            allow_redirects=True,
+        )
 
-    # Step 2: submit credentials
-    r2 = session.post(
-        login_url,
-        data={
-            "Username": username,
-            "Password": password,
-            "ReturnUrl": return_url_raw,
-            "__RequestVerificationToken": csrf,
-        },
-        allow_redirects=True,
-    )
+        # Step 3: extract access_token from redirect URL fragment
+        url = r2.url
+        if "access_token=" in url:
+            fragment = url.split("#")[1] if "#" in url else url.split("?")[1]
+            params = dict(p.split("=", 1) for p in fragment.split("&") if "=" in p)
+            token = params.get("access_token")
+            if token:
+                _LOGGER.debug("Successfully obtained Rain Bird access token")
+                return token
 
-    # Step 3: extract access_token from redirect URL fragment
-    url = r2.url
-    if "access_token=" in url:
-        fragment = url.split("#")[1] if "#" in url else url.split("?")[1]
-        params = dict(p.split("=", 1) for p in fragment.split("&") if "=" in p)
-        token = params.get("access_token")
-        if token:
-            _LOGGER.debug("Successfully obtained Rain Bird access token")
-            return token
-
-    raise RuntimeError(
-        f"access_token not found in redirect. "
-        f"HTTP {r2.status_code}, URL: {r2.url[:200]}"
-    )
+        raise RuntimeError(
+            f"access_token not found in redirect. "
+            f"HTTP {r2.status_code}, URL: {r2.url[:200]}"
+        )
 
 
 class RainBirdAuth:
@@ -96,22 +98,29 @@ class RainBirdAuth:
     Manages Rain Bird JWT token lifecycle.
 
     Caches the token in memory and on disk, and refreshes it automatically
-    60 seconds before expiration. Disk cache survives HA restarts.
+    60 seconds before expiration. Disk cache survives HA restarts and
+    integration updates (it lives in the HA config dir, keyed per account).
     All disk I/O happens inside get_token() which runs in an executor thread.
     """
 
-    def __init__(self, username: str, password: str) -> None:
+    def __init__(self, hass: HomeAssistant, username: str, password: str) -> None:
         self._username = username
         self._password = password
         self._token: str | None = None
         self._token_exp: int = 0
         self._cache_loaded = False
+        # Per-account cache file in the HA config dir (survives HACS updates,
+        # never mixes tokens between different Rain Bird accounts).
+        account_hash = hashlib.sha256(username.strip().lower().encode()).hexdigest()[:12]
+        self._cache_path = hass.config.path(
+            ".storage", f"rainbird_iq4_token_{account_hash}.json"
+        )
 
     def _load_token_cache(self) -> None:
         """Load token from disk cache if available and still valid.
         Must be called from an executor thread, not the event loop."""
         try:
-            with open(TOKEN_CACHE_PATH) as f:
+            with open(self._cache_path) as f:
                 data = json.load(f)
             token = data.get("token")
             exp = data.get("exp", 0)
@@ -128,7 +137,7 @@ class RainBirdAuth:
         """Save current token to disk cache.
         Must be called from an executor thread, not the event loop."""
         try:
-            with open(TOKEN_CACHE_PATH, "w") as f:
+            with open(self._cache_path, "w") as f:
                 json.dump({"token": self._token, "exp": self._token_exp}, f)
             _LOGGER.debug("Token saved to disk cache")
         except Exception as e:

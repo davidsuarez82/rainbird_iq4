@@ -33,7 +33,7 @@ async def _get_satellites(
     hass: HomeAssistant, username: str, password: str
 ) -> list[dict]:
     """Validate credentials and return list of satellites."""
-    auth = RainBirdAuth(username, password)
+    auth = RainBirdAuth(hass, username, password)
     api = RainBirdAPI(auth)
 
     satellites = await hass.async_add_executor_job(

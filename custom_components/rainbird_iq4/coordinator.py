@@ -188,7 +188,9 @@ class RainBirdCoordinator(DataUpdateCoordinator):
             return data
         except Exception as err:
             self._consecutive_errors += 1
-            if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+            # Never mask a failure of the very first refresh: with no previous
+            # data, returning None would crash platform setup later on.
+            if self.data is None or self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                 self._consecutive_errors = 0
                 raise UpdateFailed(f"Error fetching Rain Bird data: {err}") from err
             _LOGGER.warning(
@@ -281,7 +283,8 @@ class RainBirdConfigCoordinator(DataUpdateCoordinator):
             return data
         except Exception as err:
             self._consecutive_errors += 1
-            if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+            # Never mask a failure of the very first refresh (see realtime note).
+            if self.data is None or self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                 self._consecutive_errors = 0
                 raise UpdateFailed(f"Error fetching Rain Bird config data: {err}") from err
             _LOGGER.warning(
@@ -388,7 +391,8 @@ class RainBirdProgramCoordinator(DataUpdateCoordinator):
             return data
         except Exception as err:
             self._consecutive_errors += 1
-            if self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+            # Never mask a failure of the very first refresh (see realtime note).
+            if self.data is None or self._consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                 self._consecutive_errors = 0
                 raise UpdateFailed(f"Error fetching Rain Bird program data: {err}") from err
             _LOGGER.warning(

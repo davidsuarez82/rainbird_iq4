@@ -32,8 +32,8 @@ async def async_setup_entry(
 
     # Config-based sensors (5 min polling)
     entities.append(RainBirdControllerModeSensor(config_coordinator))
-    entities.append(RainBirdAlarmSensor(coordinator))
-    entities.append(RainBirdWarningSensor(coordinator))
+    entities.append(RainBirdAlarmSensor(coordinator, config_coordinator))
+    entities.append(RainBirdWarningSensor(coordinator, config_coordinator))
     entities.append(RainBirdRainDelaySensor(config_coordinator))
 
     # Real-time sensors (30s polling)
@@ -72,16 +72,15 @@ class RainBirdBaseSensor(CoordinatorEntity, SensorEntity):
 class RainBirdAlarmSensor(CoordinatorEntity, SensorEntity):
     """Sensor reporting number of unacknowledged alarms — real-time."""
 
-    def __init__(self, coordinator: RainBirdCoordinator) -> None:
+    def __init__(self, coordinator: RainBirdCoordinator, config_coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
         self._satellite_id = coordinator.satellite_id
+        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
+        satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_alarms"
+        self._attr_name = f"{satellite_name} Alarms"
         self._attr_icon = "mdi:alarm-light"
         self._attr_native_unit_of_measurement = "alarms"
-
-    @property
-    def name(self) -> str:
-        return f"{self.coordinator.data.get('satellite', {}).get('name', 'Rain Bird IQ4') if hasattr(self.coordinator, 'data') and self.coordinator.data else 'Rain Bird IQ4'} Alarms"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -89,22 +88,21 @@ class RainBirdAlarmSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> int:
-        return self.coordinator.data.get("alerts", {}).get("alarms", 0)
+        return self.coordinator.data.get("alerts", {}).get("alarms", 0) if self.coordinator.data else 0
 
 
 class RainBirdWarningSensor(CoordinatorEntity, SensorEntity):
     """Sensor reporting number of unacknowledged warnings — real-time."""
 
-    def __init__(self, coordinator: RainBirdCoordinator) -> None:
+    def __init__(self, coordinator: RainBirdCoordinator, config_coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
         self._satellite_id = coordinator.satellite_id
+        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
+        satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_warnings"
+        self._attr_name = f"{satellite_name} Warnings"
         self._attr_icon = "mdi:alert"
         self._attr_native_unit_of_measurement = "warnings"
-
-    @property
-    def name(self) -> str:
-        return f"Rain Bird IQ4 Warnings"
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -112,7 +110,7 @@ class RainBirdWarningSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self) -> int:
-        return self.coordinator.data.get("alerts", {}).get("warnings", 0)
+        return self.coordinator.data.get("alerts", {}).get("warnings", 0) if self.coordinator.data else 0
 
 
 class RainBirdRainDelaySensor(CoordinatorEntity, SensorEntity):

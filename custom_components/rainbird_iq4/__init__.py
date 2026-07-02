@@ -11,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 from .api import RainBirdAPI
 from .auth import RainBirdAuth
@@ -36,6 +37,16 @@ FRONTEND_URL = f"/{DOMAIN}/rainbird_iq4_card.js"
 FRONTEND_PATH = Path(__file__).parent / "frontend" / "rainbird_iq4_card.js"
 _FRONTEND_REGISTERED = False
 
+SERVICES = [
+    "start_zone",
+    "stop_zone",
+    "set_rain_delay",
+    "enable_forecast_rain_delay",
+    "disable_forecast_rain_delay",
+    "set_weather_adjust_automatic",
+    "set_weather_adjust_manual",
+]
+
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:
     """Register the bundled Lovelace card frontend file."""
@@ -48,49 +59,166 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     _FRONTEND_REGISTERED = True
 
 
-def _resolve_station(hass: HomeAssistant, entity_id: str) -> tuple[int, Any, Any]:
-    """Resolve a station sensor entity_id to its Rain Bird station_id, api and coordinator.
-    
-    Searches across all configured Rain Bird entries to find the correct one.
-    Returns (station_id, api, realtime_coordinator).
+# ── Entity resolution via unique_id (stable, no name matching) ────────────────
+
+def _resolve_unique_id(hass: HomeAssistant, entity_id: str, kind: str) -> tuple[str, int]:
+    """Resolve an entity_id to (satellite_id, object_id) via the entity registry.
+
+    kind is "station" or "program"; the unique_id format is
+    "{satellite_id}_station_{station_id}" / "{satellite_id}_program_{program_id}".
     """
-    state = hass.states.get(entity_id)
-    if not state:
-        raise ServiceValidationError(f"Entity {entity_id} not found")
-    friendly_name = state.attributes.get("friendly_name", "")
-    
-    for entry_id, coordinators in hass.data[DOMAIN].items():
-        realtime = coordinators["realtime"]
-        config   = coordinators["config"]
-        if not realtime.data or not config.data:
-            continue
-        satellite_name = config.data.get("satellite", {}).get("name", "")
-        for station in realtime.data.get("stations", []):
-            if friendly_name == f"{satellite_name} {station['name']}":
-                return station["id"], coordinators["api"], realtime
-    
+    ent_reg = er.async_get(hass)
+    entry = ent_reg.async_get(entity_id)
+    if not entry:
+        raise ServiceValidationError(
+            f"Entity {entity_id} not found in the entity registry"
+        )
+
+    marker = f"_{kind}_"
+    unique_id = entry.unique_id or ""
+    if entry.platform != DOMAIN or marker not in unique_id:
+        raise ServiceValidationError(
+            f"Entity {entity_id} is not a Rain Bird IQ4 {kind} sensor. "
+            f"Please select a {kind.capitalize()} sensor."
+        )
+
+    satellite_id_str, _, object_id_str = unique_id.rpartition(marker)
+    try:
+        object_id = int(object_id_str)
+    except ValueError:
+        raise ServiceValidationError(
+            f"Entity {entity_id} has an unexpected unique_id format: {unique_id}"
+        )
+    return satellite_id_str, object_id
+
+
+def _coordinators_for_satellite(hass: HomeAssistant, satellite_id_str: str) -> dict:
+    """Find the coordinators dict for a given satellite id string."""
+    for coordinators in hass.data.get(DOMAIN, {}).values():
+        realtime = coordinators.get("realtime")
+        if realtime and str(realtime.satellite_id) == satellite_id_str:
+            return coordinators
     raise ServiceValidationError(
-        f"Could not match entity {entity_id} to a station. "
-        f"Please select a Station sensor (e.g. ESP-TM2 Station 001)."
+        f"No active Rain Bird IQ4 controller found for satellite {satellite_id_str}. "
+        f"Is the integration loaded?"
     )
 
 
-def _resolve_program(hass: HomeAssistant, program_coordinator: RainBirdProgramCoordinator, entity_id: str) -> int:
-    """Resolve a program sensor entity_id to its Rain Bird program_id."""
-    state = hass.states.get(entity_id)
-    if not state:
-        raise ServiceValidationError(f"Entity {entity_id} not found")
-    friendly_name = state.attributes.get("friendly_name", "")
-    for program in program_coordinator.data.get("programs", []):
-        # Match against Program X Status name
-        for entry_id, coordinators in hass.data[DOMAIN].items():
-            satellite_name = coordinators["config"].data.get("satellite", {}).get("name", "") if coordinators["config"].data else ""
-            if friendly_name == f"{satellite_name} Program {program['shortName']} Status":
-                return program["id"]
+def _resolve_station(
+    hass: HomeAssistant, entity_id: str
+) -> tuple[int, RainBirdAPI, RainBirdCoordinator]:
+    """Resolve a station sensor entity_id to (station_id, api, realtime_coordinator)."""
+    satellite_id_str, station_id = _resolve_unique_id(hass, entity_id, "station")
+    coordinators = _coordinators_for_satellite(hass, satellite_id_str)
+    return station_id, coordinators["api"], coordinators["realtime"]
+
+
+def _resolve_program(
+    hass: HomeAssistant, entity_id: str
+) -> tuple[int, RainBirdAPI, RainBirdProgramCoordinator]:
+    """Resolve a program sensor entity_id to (program_id, api, program_coordinator)."""
+    satellite_id_str, program_id = _resolve_unique_id(hass, entity_id, "program")
+    coordinators = _coordinators_for_satellite(hass, satellite_id_str)
+    return program_id, coordinators["api"], coordinators["program"]
+
+
+def _single_entry_coordinators(hass: HomeAssistant) -> dict:
+    """Return coordinators when exactly one entry is configured, else raise.
+
+    Used by satellite-level services that have no entity selector.
+    """
+    entries = list(hass.data.get(DOMAIN, {}).values())
+    if len(entries) == 1:
+        return entries[0]
     raise ServiceValidationError(
-        f"Could not match entity {entity_id} to a program. "
-        f"Please select a Program Status sensor."
+        "Multiple Rain Bird IQ4 controllers are configured. "
+        "This service currently supports only a single controller setup."
     )
+
+
+# ── Domain-level service handlers (registered once) ───────────────────────────
+
+async def _handle_start_zone(call: ServiceCall) -> None:
+    hass = call.hass
+    station_id, api, coordinator = _resolve_station(hass, call.data["station_entity"])
+    duration = call.data["duration"]
+    await hass.async_add_executor_job(api.start_station, station_id, duration * 60)
+    await coordinator.async_request_refresh()
+
+
+async def _handle_stop_zone(call: ServiceCall) -> None:
+    hass = call.hass
+    station_id, api, coordinator = _resolve_station(hass, call.data["station_entity"])
+    await hass.async_add_executor_job(api.stop_station, station_id)
+    await coordinator.async_request_refresh()
+
+
+async def _handle_set_rain_delay(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinators = _single_entry_coordinators(hass)
+    api = coordinators["api"]
+    config_coordinator = coordinators["config"]
+    await hass.async_add_executor_job(
+        api.set_rain_delay, config_coordinator.satellite_id, call.data["days"]
+    )
+    await config_coordinator.async_request_refresh()
+
+
+async def _handle_enable_forecast(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinators = _single_entry_coordinators(hass)
+    api = coordinators["api"]
+    config_coordinator = coordinators["config"]
+    await hass.async_add_executor_job(
+        api.set_forecast, config_coordinator.satellite_id, True,
+        int(call.data["percent"]), float(call.data["rainfall"]), int(call.data["delay_days"]),
+    )
+    await config_coordinator.async_request_refresh()
+
+
+async def _handle_disable_forecast(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinators = _single_entry_coordinators(hass)
+    api = coordinators["api"]
+    config_coordinator = coordinators["config"]
+    await hass.async_add_executor_job(
+        api.set_forecast, config_coordinator.satellite_id, False
+    )
+    await config_coordinator.async_request_refresh()
+
+
+async def _handle_weather_adjust_automatic(call: ServiceCall) -> None:
+    hass = call.hass
+    program_id, api, program_coordinator = _resolve_program(hass, call.data["program_entity"])
+    await hass.async_add_executor_job(api.set_weather_adjust_method, program_id, 7)
+    await program_coordinator.async_request_refresh()
+
+
+async def _handle_weather_adjust_manual(call: ServiceCall) -> None:
+    hass = call.hass
+    program_id, api, program_coordinator = _resolve_program(hass, call.data["program_entity"])
+    seasonal_adjust = call.data.get("seasonal_adjust", 100)
+    await hass.async_add_executor_job(api.set_weather_adjust_method, program_id, 6)
+    await hass.async_add_executor_job(api.set_seasonal_adjust, program_id, seasonal_adjust)
+    await program_coordinator.async_request_refresh()
+
+
+_SERVICE_HANDLERS = {
+    "start_zone": _handle_start_zone,
+    "stop_zone": _handle_stop_zone,
+    "set_rain_delay": _handle_set_rain_delay,
+    "enable_forecast_rain_delay": _handle_enable_forecast,
+    "disable_forecast_rain_delay": _handle_disable_forecast,
+    "set_weather_adjust_automatic": _handle_weather_adjust_automatic,
+    "set_weather_adjust_manual": _handle_weather_adjust_manual,
+}
+
+
+def _async_register_services(hass: HomeAssistant) -> None:
+    """Register domain services once, regardless of how many entries exist."""
+    for service, handler in _SERVICE_HANDLERS.items():
+        if not hass.services.has_service(DOMAIN, service):
+            hass.services.async_register(DOMAIN, service, handler)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -104,7 +232,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scan_config   = entry.options.get(CONF_SCAN_INTERVAL_CONFIG, DEFAULT_SCAN_INTERVAL_CONFIG)
     scan_program  = entry.options.get(CONF_SCAN_INTERVAL_PROGRAM, DEFAULT_SCAN_INTERVAL_PROGRAM)
 
-    auth = RainBirdAuth(username, password)
+    auth = RainBirdAuth(hass, username, password)
     api  = RainBirdAPI(auth)
 
     coordinator         = RainBirdCoordinator(hass, api, satellite_id, company_id, scan_realtime)
@@ -129,79 +257,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
-    # ── Service handlers ──────────────────────────────────────────────────────
-
-    async def handle_start_zone(call: ServiceCall) -> None:
-        entity_id = call.data["station_entity"]
-        duration  = call.data["duration"]
-        station_id, entry_api, entry_coordinator = _resolve_station(hass, entity_id)
-        await hass.async_add_executor_job(entry_api.start_station, station_id, duration * 60)
-        await entry_coordinator.async_request_refresh()
-
-    async def handle_stop_zone(call: ServiceCall) -> None:
-        entity_id = call.data["station_entity"]
-        station_id, entry_api, entry_coordinator = _resolve_station(hass, entity_id)
-        await hass.async_add_executor_job(entry_api.stop_station, station_id)
-        await entry_coordinator.async_request_refresh()
-
-    async def handle_set_rain_delay(call: ServiceCall) -> None:
-        await hass.async_add_executor_job(api.set_rain_delay, satellite_id, call.data["days"])
-        await config_coordinator.async_request_refresh()
-
-    async def handle_enable_forecast(call: ServiceCall) -> None:
-        await hass.async_add_executor_job(
-            api.set_forecast, satellite_id, True,
-            int(call.data["percent"]), float(call.data["rainfall"]), int(call.data["delay_days"]),
-        )
-        await config_coordinator.async_request_refresh()
-
-    async def handle_disable_forecast(call: ServiceCall) -> None:
-        await hass.async_add_executor_job(api.set_forecast, satellite_id, False)
-        await config_coordinator.async_request_refresh()
-
-    async def handle_weather_adjust_automatic(call: ServiceCall) -> None:
-        entity_id = call.data["program_entity"]
-        state = hass.states.get(entity_id)
-        if not state:
-            raise ServiceValidationError(f"Entity {entity_id} not found")
-        friendly_name  = state.attributes.get("friendly_name", "")
-        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
-        program_id = None
-        for program in program_coordinator.data.get("programs", []):
-            if friendly_name == f"{satellite_name} Program {program['shortName']} Status":
-                program_id = program["id"]
-                break
-        if not program_id:
-            raise ServiceValidationError(f"Could not match entity {entity_id} to a program.")
-        await hass.async_add_executor_job(api.set_weather_adjust_method, program_id, 7)
-        await program_coordinator.async_request_refresh()
-
-    async def handle_weather_adjust_manual(call: ServiceCall) -> None:
-        entity_id = call.data["program_entity"]
-        state = hass.states.get(entity_id)
-        if not state:
-            raise ServiceValidationError(f"Entity {entity_id} not found")
-        friendly_name  = state.attributes.get("friendly_name", "")
-        satellite_name = config_coordinator.data.get("satellite", {}).get("name", "")
-        program_id = None
-        for program in program_coordinator.data.get("programs", []):
-            if friendly_name == f"{satellite_name} Program {program['shortName']} Status":
-                program_id = program["id"]
-                break
-        if not program_id:
-            raise ServiceValidationError(f"Could not match entity {entity_id} to a program.")
-        seasonal_adjust = call.data.get("seasonal_adjust", 100)
-        await hass.async_add_executor_job(api.set_weather_adjust_method, program_id, 6)
-        await hass.async_add_executor_job(api.set_seasonal_adjust, program_id, seasonal_adjust)
-        await program_coordinator.async_request_refresh()
-
-    hass.services.async_register(DOMAIN, "start_zone", handle_start_zone)
-    hass.services.async_register(DOMAIN, "stop_zone", handle_stop_zone)
-    hass.services.async_register(DOMAIN, "set_rain_delay", handle_set_rain_delay)
-    hass.services.async_register(DOMAIN, "enable_forecast_rain_delay", handle_enable_forecast)
-    hass.services.async_register(DOMAIN, "disable_forecast_rain_delay", handle_disable_forecast)
-    hass.services.async_register(DOMAIN, "set_weather_adjust_automatic", handle_weather_adjust_automatic)
-    hass.services.async_register(DOMAIN, "set_weather_adjust_manual", handle_weather_adjust_manual)
+    _async_register_services(hass)
 
     return True
 
@@ -213,14 +269,11 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    for service in [
-        "start_zone", "stop_zone", "set_rain_delay",
-        "enable_forecast_rain_delay", "disable_forecast_rain_delay",
-        "set_weather_adjust_automatic", "set_weather_adjust_manual",
-    ]:
-        hass.services.async_remove(DOMAIN, service)
-
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        # Only remove domain services when the last loaded entry goes away
+        if not hass.data[DOMAIN]:
+            for service in SERVICES:
+                hass.services.async_remove(DOMAIN, service)
     return unload_ok

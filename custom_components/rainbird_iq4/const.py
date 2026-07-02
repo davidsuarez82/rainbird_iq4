@@ -23,8 +23,6 @@ API_BASE = "https://iq4server.rainbird.com/coreapi/api"
 CLIENT_ID = "C5A6F324-3CD3-4B22-9F78-B4835BA55D25"
 REDIRECT_URI = "https://iq4.rainbird.com/auth.html"
 
-# Token cache path — stored inside the integration folder
-TOKEN_CACHE_PATH = "/config/custom_components/rainbird_iq4/rainbird_iq4_token.json"
 
 # Week days mapping (position 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat)
 WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
