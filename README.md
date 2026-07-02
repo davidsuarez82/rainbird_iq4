@@ -180,10 +180,20 @@ All zone and program actions use entity selectors filtered to Rain Bird IQ4 enti
 
 ## Known Limitations
 
+### US accounts: IQ Access subscription required
+
+Rain Bird requires an active **IQ Access subscription** for cloud/API access on **US-based accounts**. Without it, US users will see the controller "greyed out" on the IQ4 website, and manual zone control (`start_zone` / `stop_zone`) fails with `403 Forbidden` on `ManualOps/StartStations` — in some cases sensors won't load either.
+
+**EU accounts are not affected** (confirmed in the Netherlands and Germany): full functionality works without any subscription.
+
+**If you're in the US and hit this:** activate Rain Bird's free 1-month IQ Access trial from the IQ4 website (Admin → Subscriptions → IQ Access). Multiple users have confirmed this immediately restores full functionality in Home Assistant. This is a restriction on Rain Bird's account tiers, not a bug in this integration.
+
+### Other limitations
+
 - **Unofficial API** — Rain Bird does not provide a public API. This integration reverse-engineers the IQ4 web app traffic. It may break if Rain Bird changes their backend.
 - **AWS WAF** — The Rain Bird cloud is protected by AWS WAF, which blocks standard HTTP clients. This integration uses `curl_cffi` to impersonate a browser. Excessive login attempts may trigger a temporary ban.
 - **Cloud-dependent** — The integration requires an active internet connection and Rain Bird IQ4 cloud service. Local control is not supported.
-- **Token-based auth** — Authentication tokens are cached on disk and refreshed automatically every ~2 hours. A restart may briefly show entities as unavailable while the token is refreshed.
+- **Token-based auth** — Authentication tokens are cached on disk and refreshed automatically every ~2 hours. A restart may briefly show entities as unavailable while the token is refreshed. Since v1.0.7 the cache lives in `/config/.storage/rainbird_iq4_token_<account-hash>.json` (one file per account, survives HACS updates). The old file at `custom_components/rainbird_iq4/rainbird_iq4_token.json` is unused and can be deleted.
 - **Timestamps in local time** — Rain Bird event log timestamps are in controller local time, not UTC.
 
 ---
@@ -200,6 +210,8 @@ Please open an issue if you have a different model and want to help test.
 ---
 
 ## Troubleshooting
+
+**Controller shows as "Demo" or entities show weird data:** make sure the controller is fully set up on the IQ4 **website** (not just the mobile app). Remove any leftover Demo controller from your IQ4 account, verify your real controller appears at https://iq4.rainbird.com, and go through its configuration pages once, saving the settings. Then reload the integration.
 
 If the integration fails to load or entities are missing, you can run the diagnostic script to check which API endpoints are available for your controller:
 
