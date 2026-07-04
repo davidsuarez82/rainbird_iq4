@@ -216,7 +216,7 @@ Please open an issue if you have a different model and want to help test.
 If the integration fails to load or entities are missing, you can run the diagnostic script to check which API endpoints are available for your controller:
 
 ```bash
-curl -O https://raw.githubusercontent.com/davidsuarez82/rainbird_iq4/main/diagnose.sh
+curl -O https://raw.githubusercontent.com/davidsuarez82/rainbird_iq4/main/tools/diagnose.sh
 chmod +x diagnose.sh
 ./diagnose.sh your@email.com yourpassword
 ```
