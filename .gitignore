@@ -2,3 +2,4 @@ diagnostic_*.json
 rainbird_iq4_token.json
 __pycache__/
 **/__pycache__/
+*.pyc

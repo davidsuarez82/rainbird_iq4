@@ -40,10 +40,33 @@ stop_zone:
               domain: sensor
               device_class: enum
 
+stop_all_zones:
+  name: Stop All Zones
+  description: Stop all running zones on a controller in a single request.
+  fields:
+    controller_entity:
+      name: Controller
+      description: The controller to target. Optional with a single controller; required when multiple controllers are configured.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: binary_sensor
+
 set_rain_delay:
   name: Set Rain Delay
   description: Set or clear the rain delay.
   fields:
+    controller_entity:
+      name: Controller
+      description: The controller to target. Optional with a single controller; required when multiple controllers are configured.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: binary_sensor
     days:
       name: Days
       description: Number of days to delay irrigation (0 to clear).
@@ -61,6 +84,15 @@ enable_forecast_rain_delay:
   name: Enable Forecast Rain Delay
   description: Enable forecast-based rain delay with the specified parameters.
   fields:
+    controller_entity:
+      name: Controller
+      description: The controller to target. Optional with a single controller; required when multiple controllers are configured.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: binary_sensor
     percent:
       name: Rain Probability Threshold
       description: Minimum rain probability to trigger delay.
@@ -98,6 +130,16 @@ enable_forecast_rain_delay:
 disable_forecast_rain_delay:
   name: Disable Forecast Rain Delay
   description: Disable forecast-based rain delay.
+  fields:
+    controller_entity:
+      name: Controller
+      description: The controller to target. Optional with a single controller; required when multiple controllers are configured.
+      required: false
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: binary_sensor
 
 set_weather_adjust_automatic:
   name: Set Weather Adjust to Automatic

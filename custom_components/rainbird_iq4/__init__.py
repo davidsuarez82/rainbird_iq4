@@ -40,6 +40,7 @@ _FRONTEND_REGISTERED = False
 SERVICES = [
     "start_zone",
     "stop_zone",
+    "stop_all_zones",
     "set_rain_delay",
     "enable_forecast_rain_delay",
     "disable_forecast_rain_delay",
@@ -122,17 +123,30 @@ def _resolve_program(
     return program_id, coordinators["api"], coordinators["program"]
 
 
-def _single_entry_coordinators(hass: HomeAssistant) -> dict:
-    """Return coordinators when exactly one entry is configured, else raise.
+def _resolve_controller(hass: HomeAssistant, entity_id: str | None) -> dict:
+    """Return the coordinators dict for a controller-level service call.
 
-    Used by satellite-level services that have no entity selector.
+    If an entity is provided, any Rain Bird IQ4 entity of that controller works:
+    the satellite id is the prefix of every unique_id this integration creates.
+    If omitted, fall back to the single configured entry (backwards compatible),
+    or raise a clear error when multiple controllers exist.
     """
+    if entity_id:
+        ent_reg = er.async_get(hass)
+        entry = ent_reg.async_get(entity_id)
+        if not entry or entry.platform != DOMAIN or not entry.unique_id:
+            raise ServiceValidationError(
+                f"Entity {entity_id} is not a Rain Bird IQ4 entity."
+            )
+        satellite_id_str = entry.unique_id.split("_")[0]
+        return _coordinators_for_satellite(hass, satellite_id_str)
+
     entries = list(hass.data.get(DOMAIN, {}).values())
     if len(entries) == 1:
         return entries[0]
     raise ServiceValidationError(
         "Multiple Rain Bird IQ4 controllers are configured. "
-        "This service currently supports only a single controller setup."
+        "Please select a controller entity in the service call."
     )
 
 
@@ -153,9 +167,18 @@ async def _handle_stop_zone(call: ServiceCall) -> None:
     await coordinator.async_request_refresh()
 
 
+async def _handle_stop_all_zones(call: ServiceCall) -> None:
+    hass = call.hass
+    coordinators = _resolve_controller(hass, call.data.get("controller_entity"))
+    api = coordinators["api"]
+    realtime = coordinators["realtime"]
+    await hass.async_add_executor_job(api.stop_all_stations, realtime.satellite_id)
+    await realtime.async_request_refresh()
+
+
 async def _handle_set_rain_delay(call: ServiceCall) -> None:
     hass = call.hass
-    coordinators = _single_entry_coordinators(hass)
+    coordinators = _resolve_controller(hass, call.data.get("controller_entity"))
     api = coordinators["api"]
     config_coordinator = coordinators["config"]
     await hass.async_add_executor_job(
@@ -166,7 +189,7 @@ async def _handle_set_rain_delay(call: ServiceCall) -> None:
 
 async def _handle_enable_forecast(call: ServiceCall) -> None:
     hass = call.hass
-    coordinators = _single_entry_coordinators(hass)
+    coordinators = _resolve_controller(hass, call.data.get("controller_entity"))
     api = coordinators["api"]
     config_coordinator = coordinators["config"]
     await hass.async_add_executor_job(
@@ -178,7 +201,7 @@ async def _handle_enable_forecast(call: ServiceCall) -> None:
 
 async def _handle_disable_forecast(call: ServiceCall) -> None:
     hass = call.hass
-    coordinators = _single_entry_coordinators(hass)
+    coordinators = _resolve_controller(hass, call.data.get("controller_entity"))
     api = coordinators["api"]
     config_coordinator = coordinators["config"]
     await hass.async_add_executor_job(
@@ -206,6 +229,7 @@ async def _handle_weather_adjust_manual(call: ServiceCall) -> None:
 _SERVICE_HANDLERS = {
     "start_zone": _handle_start_zone,
     "stop_zone": _handle_stop_zone,
+    "stop_all_zones": _handle_stop_all_zones,
     "set_rain_delay": _handle_set_rain_delay,
     "enable_forecast_rain_delay": _handle_enable_forecast,
     "disable_forecast_rain_delay": _handle_disable_forecast,
@@ -271,7 +295,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        coordinators = hass.data[DOMAIN].pop(entry.entry_id)
+        api = coordinators.get("api")
+        if api:
+            await hass.async_add_executor_job(api.close)
         # Only remove domain services when the last loaded entry goes away
         if not hass.data[DOMAIN]:
             for service in SERVICES:

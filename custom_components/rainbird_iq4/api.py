@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import threading
 from typing import Any
 
 from curl_cffi import requests as cf_requests
@@ -19,41 +20,63 @@ class RainBirdAPI:
 
     All methods return parsed JSON or None on empty responses.
     Automatically retries with a fresh token on 401 responses.
+
+    Uses one persistent curl_cffi session per executor thread (sessions are
+    not thread-safe, and the three coordinators may poll concurrently).
+    Reusing sessions avoids a full TLS handshake on every request.
     """
 
     def __init__(self, auth: RainBirdAuth) -> None:
         self._auth = auth
+        self._local = threading.local()
+        self._sessions: list[cf_requests.Session] = []
+        self._sessions_lock = threading.Lock()
 
-    def _get(self, path: str, params: dict | None = None) -> Any:
-        """Perform a GET request, retrying once on 401."""
+    def _session(self) -> cf_requests.Session:
+        """Return the persistent session for the current thread."""
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = cf_requests.Session(impersonate="chrome")
+            self._local.session = session
+            with self._sessions_lock:
+                self._sessions.append(session)
+        return session
+
+    def close(self) -> None:
+        """Close all sessions created by this client."""
+        with self._sessions_lock:
+            for session in self._sessions:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+            self._sessions.clear()
+
+    def _request(self, method: str, path: str, json: Any = None, params: dict | None = None) -> Any:
+        """Perform a request on the thread-local session, retrying once on 401."""
         url = f"{API_BASE}/{path}"
-        r = cf_requests.get(url, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
+        session = self._session()
+        r = session.request(method, url, json=json, params=params,
+                            headers=self._auth.get_headers(), timeout=30)
         if r.status_code == 401:
             _LOGGER.debug("Token rejected, refreshing and retrying")
             self._auth.invalidate()
-            r = cf_requests.get(url, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
+            r = session.request(method, url, json=json, params=params,
+                                headers=self._auth.get_headers(), timeout=30)
         r.raise_for_status()
         return r.json() if r.text.strip() else None
+
+    def _get(self, path: str, params: dict | None = None) -> Any:
+        """Perform a GET request, retrying once on 401."""
+        return self._request("GET", path, params=params)
 
     def _post(self, path: str, json: Any = None, params: dict | None = None) -> Any:
         """Perform a POST request, retrying once on 401."""
-        url = f"{API_BASE}/{path}"
-        r = cf_requests.post(url, json=json, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
-        if r.status_code == 401:
-            self._auth.invalidate()
-            r = cf_requests.post(url, json=json, params=params, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
-        r.raise_for_status()
-        return r.json() if r.text.strip() else None
+        return self._request("POST", path, json=json, params=params)
 
     def _patch(self, path: str, json: Any = None) -> Any:
         """Perform a PATCH request, retrying once on 401."""
-        url = f"{API_BASE}/{path}"
-        r = cf_requests.patch(url, json=json, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
-        if r.status_code == 401:
-            self._auth.invalidate()
-            r = cf_requests.patch(url, json=json, headers=self._auth.get_headers(), timeout=30, impersonate="chrome")
-        r.raise_for_status()
-        return r.json() if r.text.strip() else None
+        return self._request("PATCH", path, json=json)
 
     # ── Satellite ─────────────────────────────────────────────────────────────
 
@@ -128,14 +151,15 @@ class RainBirdAPI:
         )
 
     def stop_all_stations(self, satellite_id: int) -> None:
-        """Stop all running stations on a satellite."""
+        """Stop all running stations on a satellite in a single batch call."""
         stations = self.get_station_list(satellite_id)
-        for station in stations:
-            self._post(
-                "ManualOps/AdvanceStations",
-                json=[{"programId": -1, "stationId": station["id"]}],
-                params={"isProgramIndex": "true"},
-            )
+        if not stations:
+            return
+        self._post(
+            "ManualOps/AdvanceStations",
+            json=[{"programId": -1, "stationId": s["id"]} for s in stations],
+            params={"isProgramIndex": "true"},
+        )
 
     # ── Rain delay ────────────────────────────────────────────────────────────
 

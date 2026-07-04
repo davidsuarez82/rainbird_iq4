@@ -186,7 +186,7 @@ class RainBirdStationSensor(SensorEntity):
         return {}
 
     @property
-    def state(self) -> str:
+    def native_value(self) -> str:
         station = self._get_station()
         if station.get("isRunning"):
             return "running"
@@ -196,10 +196,6 @@ class RainBirdStationSensor(SensorEntity):
         if status == "P":
             return "paused"
         return "idle"
-
-    @property
-    def native_value(self) -> str:
-        return self.state
 
     def _is_active(self) -> bool:
         """Return True if this station is assigned to at least one program."""

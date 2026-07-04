@@ -1,7 +1,7 @@
 {
   "domain": "rainbird_iq4",
   "name": "Rain Bird IQ4",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "documentation": "https://github.com/davidsuarez82/rainbird_iq4",
   "issue_tracker": "https://github.com/davidsuarez82/rainbird_iq4/issues",
   "requirements": ["curl_cffi>=0.7.0"],
