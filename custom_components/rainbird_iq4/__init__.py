@@ -16,6 +16,7 @@ from homeassistant.helpers import entity_registry as er
 from .api import RainBirdAPI
 from .auth import RainBirdAuth
 from .const import (
+    CONF_AUTH_CHANNEL,
     CONF_COMPANY_ID,
     CONF_PASSWORD,
     CONF_SATELLITE_ID,
@@ -23,6 +24,7 @@ from .const import (
     CONF_SCAN_INTERVAL_CONFIG,
     CONF_SCAN_INTERVAL_PROGRAM,
     CONF_USERNAME,
+    DEFAULT_AUTH_CHANNEL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL_CONFIG,
     DEFAULT_SCAN_INTERVAL_PROGRAM,
@@ -256,7 +258,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     scan_config   = entry.options.get(CONF_SCAN_INTERVAL_CONFIG, DEFAULT_SCAN_INTERVAL_CONFIG)
     scan_program  = entry.options.get(CONF_SCAN_INTERVAL_PROGRAM, DEFAULT_SCAN_INTERVAL_PROGRAM)
 
-    auth = RainBirdAuth(hass, username, password)
+    # Auth channel: chosen at install (entry.data), optionally overridden
+    # later via the options flow (entry.options takes precedence).
+    auth_channel = entry.options.get(
+        CONF_AUTH_CHANNEL,
+        entry.data.get(CONF_AUTH_CHANNEL, DEFAULT_AUTH_CHANNEL),
+    )
+
+    auth = RainBirdAuth(hass, username, password, channel=auth_channel)
     api  = RainBirdAPI(auth)
 
     coordinator         = RainBirdCoordinator(hass, api, satellite_id, company_id, scan_realtime)

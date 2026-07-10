@@ -20,8 +20,29 @@ DEFAULT_NAME = "Rain Bird IQ4"
 # Rain Bird API
 AUTH_BASE = "https://iq4server.rainbird.com/coreidentityserver"
 API_BASE = "https://iq4server.rainbird.com/coreapi/api"
+
+# --- Web portal channel (isIQ) — the original/default login method ---
+# Implicit flow, same as the iq4.rainbird.com web portal. Token carries
+# isApp: false / isIQ: true. On US free-tier accounts this channel is
+# capped at "0 controllers", so zone control returns 403.
 CLIENT_ID = "C5A6F324-3CD3-4B22-9F78-B4835BA55D25"
 REDIRECT_URI = "https://iq4.rainbird.com/auth.html"
+
+# --- Mobile app channel (isApp) — alternative login method ---
+# Authorization Code + PKCE, same OAuth client the official Rain Bird 2.0
+# app uses. Token carries isApp: true / isIQ: false. This channel is not
+# subject to the web-portal subscription cap, so it can control zones on
+# US free-tier accounts where the web channel returns 403.
+APP_CLIENT_ID = "5B0FA4CD-8248-4BEB-B89A-F0AF8A254DB5"
+APP_CLIENT_SECRET = "537C58B6-DCCF-4718-BFE6-CCD0D3FCDC07"
+APP_REDIRECT_URI = "com.rainbird.mobile://auth"
+APP_SCOPE = "coreAPI.read coreAPI.write openid profile offline_access"
+
+# Auth channel selection
+CONF_AUTH_CHANNEL = "auth_channel"
+AUTH_CHANNEL_WEB = "web"
+AUTH_CHANNEL_APP = "app"
+DEFAULT_AUTH_CHANNEL = AUTH_CHANNEL_WEB
 
 
 # Week days mapping (position 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat)

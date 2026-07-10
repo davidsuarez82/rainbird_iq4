@@ -80,10 +80,11 @@ Repeat the process to add additional controllers.
 
 ### Options
 
-After setup, click **Configure** on the integration to adjust polling intervals:
+After setup, click **Configure** on the integration to adjust the authentication channel and polling intervals:
 
 | Setting | Default | Range | Description |
 |---|---|---|---|
+| Authentication channel | Web portal | Web portal / Mobile app | How the integration logs in. Use *Mobile app* if zone control fails with a 403 (see Known Limitations). Changing this reloads the integration. |
 | Real-time interval | 30s | 10–300s | Station status, alarms |
 | Config interval | 5 min | 60–3600s | Rain delay, forecast, controller mode |
 | Program interval | 1 hour | 5 min–24h | Programs, schedules, seasonal adjust |
@@ -180,13 +181,18 @@ All zone and program actions use entity selectors filtered to Rain Bird IQ4 enti
 
 ## Known Limitations
 
-### US accounts: IQ Access subscription required
+### US accounts: zone control returns 403
 
-Rain Bird requires an active **IQ Access subscription** for cloud/API access on **US-based accounts**. Without it, US users will see the controller "greyed out" on the IQ4 website, and manual zone control (`start_zone` / `stop_zone`) fails with `403 Forbidden` on `ManualOps/StartStations` — in some cases sensors won't load either.
+On **US-based accounts** without an active **IQ Access subscription**, Rain Bird's web/IQ channel caps account access (the controller shows as "0 Controller Tier" / greyed out on the IQ4 website). Since this integration logs in through that same web channel by default, manual zone control (`start_zone` / `stop_zone`) fails with `403` on `ManualOps/StartStations`. Read-only data (status, rain delay, alarms) still works.
 
 **EU accounts are not affected** (confirmed in the Netherlands and Germany): full functionality works without any subscription.
 
-**If you're in the US and hit this:** activate Rain Bird's free 1-month IQ Access trial from the IQ4 website (Admin → Subscriptions → IQ Access). Multiple users have confirmed this immediately restores full functionality in Home Assistant. This is a restriction on Rain Bird's account tiers, not a bug in this integration.
+**If you're in the US and hit this, you have two options:**
+
+1. **Switch the authentication channel to "Mobile app" (no subscription needed).** Go to the integration's **Configure** screen and set **Authentication channel** to *Mobile app*. This logs in the same way the official Rain Bird 2.0 app does, which is not subject to the web-channel cap, so zone control works on the free tier. You can also pick this channel when first adding the integration.
+2. **Activate Rain Bird's free 1-month IQ Access trial** from the IQ4 website (Admin → Subscriptions → IQ Access), which restores the web channel too.
+
+This is a restriction on Rain Bird's account tiers, not a bug in this integration.
 
 ### Other limitations
 

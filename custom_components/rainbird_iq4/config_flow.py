@@ -9,10 +9,18 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .api import RainBirdAPI
 from .auth import RainBirdAuth
 from .const import (
+    AUTH_CHANNEL_APP,
+    AUTH_CHANNEL_WEB,
+    CONF_AUTH_CHANNEL,
     CONF_COMPANY_ID,
     CONF_PASSWORD,
     CONF_SATELLITE_ID,
@@ -20,20 +28,35 @@ from .const import (
     CONF_SCAN_INTERVAL_CONFIG,
     CONF_SCAN_INTERVAL_PROGRAM,
     CONF_USERNAME,
+    DEFAULT_AUTH_CHANNEL,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL_CONFIG,
     DEFAULT_SCAN_INTERVAL_PROGRAM,
     DOMAIN,
 )
 
+def _channel_selector() -> SelectSelector:
+    """Build a translatable dropdown for the auth channel.
+
+    Option labels are resolved from the translation files under
+    selector.auth_channel.options (keys: web / app).
+    """
+    return SelectSelector(
+        SelectSelectorConfig(
+            options=[AUTH_CHANNEL_WEB, AUTH_CHANNEL_APP],
+            translation_key="auth_channel",
+            mode=SelectSelectorMode.DROPDOWN,
+        )
+    )
+
 _LOGGER = logging.getLogger(__name__)
 
 
 async def _get_satellites(
-    hass: HomeAssistant, username: str, password: str
+    hass: HomeAssistant, username: str, password: str, channel: str
 ) -> list[dict]:
     """Validate credentials and return list of satellites."""
-    auth = RainBirdAuth(hass, username, password)
+    auth = RainBirdAuth(hass, username, password, channel=channel)
     api = RainBirdAPI(auth)
 
     satellites = await hass.async_add_executor_job(
@@ -54,6 +77,7 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._username: str = ""
         self._password: str = ""
+        self._channel: str = DEFAULT_AUTH_CHANNEL
         self._satellites: list[dict] = []
 
     async def async_step_user(
@@ -65,10 +89,11 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._username = user_input[CONF_USERNAME]
             self._password = user_input[CONF_PASSWORD]
+            self._channel = user_input.get(CONF_AUTH_CHANNEL, DEFAULT_AUTH_CHANNEL)
 
             try:
                 self._satellites = await _get_satellites(
-                    self.hass, self._username, self._password
+                    self.hass, self._username, self._password, self._channel
                 )
             except ValueError as err:
                 errors["base"] = "no_controllers"
@@ -91,6 +116,9 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data_schema=vol.Schema({
                 vol.Required(CONF_USERNAME): str,
                 vol.Required(CONF_PASSWORD): str,
+                vol.Required(
+                    CONF_AUTH_CHANNEL, default=DEFAULT_AUTH_CHANNEL
+                ): _channel_selector(),
             }),
             errors=errors,
         )
@@ -129,6 +157,7 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data={
                 CONF_USERNAME:     self._username,
                 CONF_PASSWORD:     self._password,
+                CONF_AUTH_CHANNEL: self._channel,
                 CONF_SATELLITE_ID: satellite["id"],
                 CONF_COMPANY_ID:   satellite["companyId"],
             },
@@ -162,10 +191,19 @@ class RainBirdOptionsFlow(config_entries.OptionsFlow):
         current_program = self._config_entry.options.get(
             CONF_SCAN_INTERVAL_PROGRAM, DEFAULT_SCAN_INTERVAL_PROGRAM
         )
+        # Channel may have been set at install time (entry.data) and possibly
+        # overridden later (entry.options). Options take precedence.
+        current_channel = self._config_entry.options.get(
+            CONF_AUTH_CHANNEL,
+            self._config_entry.data.get(CONF_AUTH_CHANNEL, DEFAULT_AUTH_CHANNEL),
+        )
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema({
+                vol.Optional(
+                    CONF_AUTH_CHANNEL, default=current_channel
+                ): _channel_selector(),
                 vol.Optional(CONF_SCAN_INTERVAL, default=current_realtime): vol.All(
                     int, vol.Range(min=10, max=300)
                 ),

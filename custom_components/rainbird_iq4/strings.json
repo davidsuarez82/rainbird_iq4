@@ -1,0 +1,57 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rain Bird IQ4",
+        "description": "Enter your Rain Bird IQ4 cloud account credentials.",
+        "data": {
+          "username": "Email address",
+          "password": "Password",
+          "auth_channel": "Authentication channel"
+        },
+        "data_description": {
+          "auth_channel": "How the integration logs in. Leave on \"Web portal\" for most accounts. Choose \"Mobile app\" only if zone control fails with a 403 error (e.g. US free-tier accounts)."
+        }
+      },
+      "select_controller": {
+        "title": "Select controller",
+        "description": "Multiple controllers were found on this account. Choose the one to add.",
+        "data": {
+          "satellite_id": "Controller"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect. Check your credentials and internet connection, then try again.",
+      "no_controllers": "No controllers were found on this account.",
+      "unknown": "An unexpected error occurred. See the logs for details."
+    },
+    "abort": {
+      "already_configured": "This controller is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Rain Bird IQ4 options",
+        "data": {
+          "auth_channel": "Authentication channel",
+          "scan_interval": "Real-time data poll interval (seconds)",
+          "scan_interval_config": "Controller config poll interval (seconds)",
+          "scan_interval_program": "Program poll interval (seconds)"
+        },
+        "data_description": {
+          "auth_channel": "How the integration logs in. Leave on \"Web portal\" for most accounts. Choose \"Mobile app\" only if zone control fails with a 403 error (e.g. US free-tier accounts). Changing this reloads the integration."
+        }
+      }
+    }
+  },
+  "selector": {
+    "auth_channel": {
+      "options": {
+        "web": "Web portal (default) — works for most accounts",
+        "app": "Mobile app — use if zone control fails with 403 (e.g. US free tier)"
+      }
+    }
+  }
+}

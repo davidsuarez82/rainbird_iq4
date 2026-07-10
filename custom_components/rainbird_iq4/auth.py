@@ -8,15 +8,27 @@ import logging
 import re
 import secrets
 import time
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urljoin, urlparse
 
 from curl_cffi import requests as cf
 
 from homeassistant.core import HomeAssistant
 
-from .const import AUTH_BASE, CLIENT_ID
+from .const import (
+    APP_CLIENT_ID,
+    APP_CLIENT_SECRET,
+    APP_REDIRECT_URI,
+    APP_SCOPE,
+    AUTH_BASE,
+    AUTH_CHANNEL_APP,
+    AUTH_CHANNEL_WEB,
+    CLIENT_ID,
+    DEFAULT_AUTH_CHANNEL,
+)
 
 _LOGGER = logging.getLogger(__name__)
+
+_MAX_REDIRECTS = 10
 
 
 def _decode_jwt_exp(token: str) -> int:
@@ -93,6 +105,136 @@ def fetch_token(username: str, password: str) -> str:
         )
 
 
+def _make_pkce_pair() -> tuple[str, str]:
+    """Generate a PKCE (code_verifier, code_challenge) pair using S256."""
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
+
+
+def fetch_token_isapp(username: str, password: str) -> str:
+    """
+    Authenticate the way the official Rain Bird 2.0 mobile app does and
+    return a JWT access token.
+
+    Uses the Authorization Code + PKCE flow with the mobile app's OAuth
+    client. The resulting token carries isApp: true / isIQ: false, which
+    (unlike the web-portal token) is not subject to the US free-tier
+    "0 controllers" cap, so it can issue zone-control commands that the
+    web channel rejects with 403.
+
+    Uses curl_cffi to impersonate Chrome and bypass the AWS WAF challenge.
+    """
+    state = secrets.token_hex(8).upper()
+    nonce = secrets.token_hex(8).upper()
+    code_verifier, code_challenge = _make_pkce_pair()
+
+    return_url_raw = (
+        f"/coreidentityserver/connect/authorize/callback"
+        f"?client_id={APP_CLIENT_ID}"
+        f"&redirect_uri={quote(APP_REDIRECT_URI, safe='')}"
+        f"&response_type=code"
+        f"&code_challenge={code_challenge}"
+        f"&code_challenge_method=S256"
+        f"&scope={quote(APP_SCOPE, safe='')}"
+        f"&state={state}&nonce={nonce}"
+    )
+    login_url = f"{AUTH_BASE}/Account/Login?ReturnUrl={quote(return_url_raw, safe='')}"
+
+    with cf.Session(impersonate="chrome") as session:
+        # Step 1: load login page and extract CSRF token
+        r1 = session.get(login_url)
+        if r1.status_code != 200:
+            raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
+
+        match = re.search(
+            r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text
+        )
+        if not match:
+            raise RuntimeError("CSRF token not found in login page")
+        csrf = match.group(1)
+
+        # Step 2: submit credentials without auto-following redirects; we
+        # need to intercept the authorization code, which lands on a
+        # non-http redirect URI (com.rainbird.mobile://auth) the client
+        # cannot follow itself.
+        resp = session.post(
+            login_url,
+            data={
+                "Username": username,
+                "Password": password,
+                "ReturnUrl": return_url_raw,
+                "__RequestVerificationToken": csrf,
+            },
+            allow_redirects=False,
+        )
+
+        if resp.status_code == 200 and not (
+            resp.headers.get("location") or resp.headers.get("Location")
+        ):
+            raise RuntimeError(
+                "Login rejected (server returned the login page instead of "
+                "redirecting) — check the username/password."
+            )
+
+        # Step 3: walk the redirect chain until the authorization code appears
+        code = None
+        current_url = login_url
+        for _ in range(_MAX_REDIRECTS):
+            location = resp.headers.get("location") or resp.headers.get("Location")
+            if not location:
+                raise RuntimeError(
+                    f"No redirect while logging in (HTTP {resp.status_code})."
+                )
+            absolute = urljoin(current_url, location)
+            parsed = urlparse(absolute)
+            found = parse_qs(parsed.query).get("code", [None])[0]
+            if found:
+                code = found
+                break
+            if parsed.scheme not in ("http", "https"):
+                raise RuntimeError(
+                    f"Reached final redirect but found no authorization code: {absolute}"
+                )
+            current_url = absolute
+            resp = session.get(current_url, allow_redirects=False)
+
+        if not code:
+            raise RuntimeError("Too many redirects while logging in — no code found.")
+
+        # Step 4: exchange the code for a token using the app client secret
+        basic = base64.b64encode(
+            f"{APP_CLIENT_ID}:{APP_CLIENT_SECRET}".encode()
+        ).decode()
+        token_resp = session.post(
+            f"{AUTH_BASE}/connect/token",
+            headers={
+                "Authorization": f"Basic {basic}",
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Accept": "*/*",
+            },
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "code_verifier": code_verifier,
+                "redirect_uri": APP_REDIRECT_URI,
+            },
+        )
+        if token_resp.status_code != 200:
+            raise RuntimeError(
+                f"Token exchange failed: HTTP {token_resp.status_code}, "
+                f"body: {token_resp.text[:200]}"
+            )
+
+        token = token_resp.json().get("access_token")
+        if not token:
+            raise RuntimeError("Token exchange succeeded but no access_token returned.")
+
+        _LOGGER.debug("Successfully obtained Rain Bird app-channel access token")
+        return token
+
+
 class RainBirdAuth:
     """
     Manages Rain Bird JWT token lifecycle.
@@ -103,15 +245,25 @@ class RainBirdAuth:
     All disk I/O happens inside get_token() which runs in an executor thread.
     """
 
-    def __init__(self, hass: HomeAssistant, username: str, password: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        username: str,
+        password: str,
+        channel: str = DEFAULT_AUTH_CHANNEL,
+    ) -> None:
         self._username = username
         self._password = password
+        self._channel = channel
         self._token: str | None = None
         self._token_exp: int = 0
         self._cache_loaded = False
-        # Per-account cache file in the HA config dir (survives HACS updates,
-        # never mixes tokens between different Rain Bird accounts).
-        account_hash = hashlib.sha256(username.strip().lower().encode()).hexdigest()[:12]
+        # Per-account, per-channel cache file in the HA config dir (survives
+        # HACS updates, never mixes tokens between different Rain Bird
+        # accounts, and keeps web/app tokens separate so switching channels
+        # never reuses a token from the other channel).
+        key = f"{username.strip().lower()}|{channel}"
+        account_hash = hashlib.sha256(key.encode()).hexdigest()[:12]
         self._cache_path = hass.config.path(
             ".storage", f"rainbird_iq4_token_{account_hash}.json"
         )
@@ -154,8 +306,13 @@ class RainBirdAuth:
             self._load_token_cache()
 
         if not self._is_token_valid():
-            _LOGGER.debug("Fetching new Rain Bird token")
-            self._token = fetch_token(self._username, self._password)
+            _LOGGER.debug(
+                "Fetching new Rain Bird token (channel=%s)", self._channel
+            )
+            if self._channel == AUTH_CHANNEL_APP:
+                self._token = fetch_token_isapp(self._username, self._password)
+            else:
+                self._token = fetch_token(self._username, self._password)
             self._token_exp = _decode_jwt_exp(self._token)
             self._save_token_cache()
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime
 import logging
 import threading
+import time
 from typing import Any
 
 from curl_cffi import requests as cf_requests
@@ -52,17 +53,43 @@ class RainBirdAPI:
                     pass
             self._sessions.clear()
 
+    # HTTP statuses that indicate a transient server-side failure and are
+    # safe to retry. The app-channel StartStations occasionally returns 500
+    # "transient failure" that succeeds on a retry.
+    _TRANSIENT_STATUSES = (500, 502, 503, 504)
+    _MAX_TRANSIENT_RETRIES = 2
+
     def _request(self, method: str, path: str, json: Any = None, params: dict | None = None) -> Any:
-        """Perform a request on the thread-local session, retrying once on 401."""
+        """Perform a request on the thread-local session.
+
+        Retries once on 401 (after refreshing the token) and up to a few
+        times on transient 5xx errors with a short backoff.
+        """
         url = f"{API_BASE}/{path}"
         session = self._session()
+
         r = session.request(method, url, json=json, params=params,
                             headers=self._auth.get_headers(), timeout=30)
+
         if r.status_code == 401:
             _LOGGER.debug("Token rejected, refreshing and retrying")
             self._auth.invalidate()
             r = session.request(method, url, json=json, params=params,
                                 headers=self._auth.get_headers(), timeout=30)
+
+        # Retry transient server errors (e.g. app-channel StartStations 500).
+        attempt = 0
+        while r.status_code in self._TRANSIENT_STATUSES and attempt < self._MAX_TRANSIENT_RETRIES:
+            attempt += 1
+            delay = 0.5 * attempt
+            _LOGGER.debug(
+                "Transient HTTP %s on %s %s, retry %d/%d after %.1fs",
+                r.status_code, method, path, attempt, self._MAX_TRANSIENT_RETRIES, delay,
+            )
+            time.sleep(delay)
+            r = session.request(method, url, json=json, params=params,
+                                headers=self._auth.get_headers(), timeout=30)
+
         r.raise_for_status()
         return r.json() if r.text.strip() else None
 
