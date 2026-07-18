@@ -31,6 +31,7 @@ async def async_setup_entry(
     entities = [
         RainBirdConnectionBinarySensor(coordinators["realtime"], config_coordinator),
         RainBirdForecastBinarySensor(config_coordinator),
+        RainBirdAnyZoneRunningBinarySensor(coordinators["realtime"], config_coordinator),
     ]
 
     for sensor in config_coordinator.data.get("sensors", []):
@@ -72,6 +73,67 @@ class RainBirdConnectionBinarySensor(BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         return self._coordinator.data.get("connection", {}).get("isConnected", False) if self._coordinator.data else False
+
+    @property
+    def available(self) -> bool:
+        return self._coordinator.last_update_success
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            self._coordinator.async_add_listener(self.async_write_ha_state)
+        )
+        self.async_on_remove(
+            self._config_coordinator.async_add_listener(self.async_write_ha_state)
+        )
+
+
+class RainBirdAnyZoneRunningBinarySensor(BinarySensorEntity):
+    """Binary sensor reporting whether any zone is currently running — real-time.
+
+    Saves comparing every Station sensor individually or building a template
+    helper — a single entity for automations like "pause music while
+    irrigation is running" or "notify when irrigation starts".
+    """
+
+    def __init__(
+        self,
+        coordinator: RainBirdCoordinator,
+        config_coordinator: RainBirdConfigCoordinator,
+    ) -> None:
+        self._coordinator = coordinator
+        self._config_coordinator = config_coordinator
+        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
+        self._satellite_id = coordinator.satellite_id
+        self._satellite_name = satellite.get("name", "Rain Bird IQ4")
+        self._attr_unique_id = f"{self._satellite_id}_any_zone_running"
+        self._attr_name = f"{self._satellite_name} Any Zone Running"
+        self._attr_device_class = BinarySensorDeviceClass.RUNNING
+        self._attr_icon = "mdi:sprinkler-variant"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        satellite = self._config_coordinator.data.get("satellite", {}) if self._config_coordinator.data else {}
+        return DeviceInfo(
+            identifiers={(DOMAIN, str(self._satellite_id))},
+            name=self._satellite_name,
+            manufacturer="Rain Bird",
+            model=satellite.get("model", "Rain Bird IQ4"),
+            sw_version=satellite.get("version"),
+        )
+
+    def _running_stations(self) -> list[dict]:
+        if not self._coordinator.data:
+            return []
+        return [s for s in self._coordinator.data.get("stations", []) if s.get("isRunning")]
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._running_stations())
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        running = self._running_stations()
+        return {"running_zones": [s.get("name") for s in running]} if running else {}
 
     @property
     def available(self) -> bool:
