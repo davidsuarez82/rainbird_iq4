@@ -10,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import (
@@ -41,7 +42,11 @@ async def async_setup_entry(
     config_coordinator  = coordinators["config"]
     program_coordinator = coordinators["program"]
 
-    tz = zoneinfo.ZoneInfo(hass.config.time_zone)
+    # dt_util.get_default_time_zone() returns the same ZoneInfo HA uses
+    # internally and is already cached, unlike constructing
+    # zoneinfo.ZoneInfo(...) directly here, which can hit disk on first
+    # use and trips HA's "blocking call inside the event loop" detector.
+    tz = dt_util.get_default_time_zone()
 
     entities = []
     for program in program_coordinator.data.get("programs", []):
@@ -236,7 +241,10 @@ class RainBirdCalendar(CalendarEntity):
             days_ahead=days_ahead,
         )
 
+        # end_date is exclusive per Home Assistant's calendar convention —
+        # using <= here would duplicate an event that lands exactly on the
+        # boundary when HA requests the next adjacent range.
         return [
             e for e in all_events
-            if start_date <= e.start_datetime_local <= end_date
+            if start_date <= e.start_datetime_local < end_date
         ]

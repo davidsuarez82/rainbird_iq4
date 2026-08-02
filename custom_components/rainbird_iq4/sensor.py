@@ -188,13 +188,11 @@ class RainBirdStationSensor(SensorEntity):
     @property
     def native_value(self) -> str:
         station = self._get_station()
-        if station.get("isRunning"):
-            return "running"
         status = station.get("status", "-")
-        if status == "R":
-            return "running"
         if status == "P":
             return "paused"
+        if station.get("isRunning") or status == "R":
+            return "running"
         return "idle"
 
     def _is_active(self) -> bool:

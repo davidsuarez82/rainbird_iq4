@@ -27,11 +27,19 @@ class RainBirdAPI:
     Reusing sessions avoids a full TLS handshake on every request.
     """
 
+    # Station lists (id/name/terminal) change essentially never in normal
+    # operation, but were being re-fetched on every realtime poll (every
+    # 30s by default) and every program poll. Cache them for a while to
+    # cut needless cloud calls.
+    _STATION_LIST_CACHE_TTL = 3600  # seconds
+
     def __init__(self, auth: RainBirdAuth) -> None:
         self._auth = auth
         self._local = threading.local()
         self._sessions: list[cf_requests.Session] = []
         self._sessions_lock = threading.Lock()
+        self._station_list_cache: dict[int, tuple[float, list]] = {}
+        self._station_list_cache_lock = threading.Lock()
 
     def _session(self) -> cf_requests.Session:
         """Return the persistent session for the current thread."""
@@ -144,9 +152,25 @@ class RainBirdAPI:
 
     # ── Stations ──────────────────────────────────────────────────────────────
 
-    def get_station_list(self, satellite_id: int) -> list:
-        """Get all stations (zones) for a satellite."""
-        return self._get("Station/GetStationListForSatellite", {"satelliteId": satellite_id}) or []
+    def get_station_list(self, satellite_id: int, force_refresh: bool = False) -> list:
+        """Get all stations (zones) for a satellite.
+
+        Station id/name/terminal data essentially never changes, so the
+        result is cached for _STATION_LIST_CACHE_TTL seconds. Pass
+        force_refresh=True to bypass the cache (e.g. after the user presses
+        the Reload button and entities are being rebuilt).
+        """
+        with self._station_list_cache_lock:
+            cached = self._station_list_cache.get(satellite_id)
+            if not force_refresh and cached and (time.time() - cached[0]) < self._STATION_LIST_CACHE_TTL:
+                return cached[1]
+
+        stations = self._get("Station/GetStationListForSatellite", {"satelliteId": satellite_id}) or []
+
+        with self._station_list_cache_lock:
+            self._station_list_cache[satellite_id] = (time.time(), stations)
+
+        return stations
 
     def get_run_station_status(self, satellite_id: int) -> list:
         """Get real-time run status for all stations."""
@@ -177,14 +201,24 @@ class RainBirdAPI:
             params={"isProgramIndex": "true"},
         )
 
-    def stop_all_stations(self, satellite_id: int) -> None:
-        """Stop all running stations on a satellite in a single batch call."""
-        stations = self.get_station_list(satellite_id)
-        if not stations:
+    def stop_all_stations(self, satellite_id: int, station_ids: list[int] | None = None) -> None:
+        """Stop running stations on a satellite in a single batch call.
+
+        station_ids lets the caller target only the zones it already knows
+        to be running (typically read straight from the realtime
+        coordinator's cached data, at zero extra API cost). If None, falls
+        back to targeting every station on the controller — the safe
+        default for when no live status is available yet (e.g. right after
+        startup before the first realtime refresh completes).
+        """
+        if station_ids is None:
+            stations = self.get_station_list(satellite_id)
+            station_ids = [s["id"] for s in stations]
+        if not station_ids:
             return
         self._post(
             "ManualOps/AdvanceStations",
-            json=[{"programId": -1, "stationId": s["id"]} for s in stations],
+            json=[{"programId": -1, "stationId": station_id} for station_id in station_ids],
             params={"isProgramIndex": "true"},
         )
 

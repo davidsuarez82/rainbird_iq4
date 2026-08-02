@@ -59,9 +59,12 @@ async def _get_satellites(
     auth = RainBirdAuth(hass, username, password, channel=channel)
     api = RainBirdAPI(auth)
 
-    satellites = await hass.async_add_executor_job(
-        api.get_satellite_list
-    )
+    try:
+        satellites = await hass.async_add_executor_job(
+            api.get_satellite_list
+        )
+    finally:
+        await hass.async_add_executor_job(api.close)
 
     if not satellites:
         raise ValueError("No controllers found for this account")

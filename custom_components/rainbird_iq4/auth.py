@@ -5,8 +5,10 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
+import threading
 import time
 from urllib.parse import parse_qs, quote, urljoin, urlparse
 
@@ -258,6 +260,10 @@ class RainBirdAuth:
         self._token: str | None = None
         self._token_exp: int = 0
         self._cache_loaded = False
+        # Serializes token refreshes across the three coordinators, which
+        # poll from different executor threads. Without this, an expired
+        # token can trigger up to three simultaneous logins.
+        self._refresh_lock = threading.Lock()
         # Per-account, per-channel cache file in the HA config dir (survives
         # HACS updates, never mixes tokens between different Rain Bird
         # accounts, and keeps web/app tokens separate so switching channels
@@ -291,6 +297,7 @@ class RainBirdAuth:
         try:
             with open(self._cache_path, "w") as f:
                 json.dump({"token": self._token, "exp": self._token_exp}, f)
+            os.chmod(self._cache_path, 0o600)
             _LOGGER.debug("Token saved to disk cache")
         except Exception as e:
             _LOGGER.warning("Could not save token cache: %s", e)
@@ -306,15 +313,21 @@ class RainBirdAuth:
             self._load_token_cache()
 
         if not self._is_token_valid():
-            _LOGGER.debug(
-                "Fetching new Rain Bird token (channel=%s)", self._channel
-            )
-            if self._channel == AUTH_CHANNEL_APP:
-                self._token = fetch_token_isapp(self._username, self._password)
-            else:
-                self._token = fetch_token(self._username, self._password)
-            self._token_exp = _decode_jwt_exp(self._token)
-            self._save_token_cache()
+            # Serialize refreshes: the three coordinators can all land here
+            # at once with an expired token. Only the first thread through
+            # the lock should actually log in; the rest just wait and reuse
+            # the token it fetched.
+            with self._refresh_lock:
+                if not self._is_token_valid():
+                    _LOGGER.debug(
+                        "Fetching new Rain Bird token (channel=%s)", self._channel
+                    )
+                    if self._channel == AUTH_CHANNEL_APP:
+                        self._token = fetch_token_isapp(self._username, self._password)
+                    else:
+                        self._token = fetch_token(self._username, self._password)
+                    self._token_exp = _decode_jwt_exp(self._token)
+                    self._save_token_cache()
 
         return self._token
 

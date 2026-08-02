@@ -228,12 +228,23 @@ class RainBirdCoordinator(DataUpdateCoordinator):
             live     = station_live.get(sid_key, {})
             events   = station_event_data.get(terminal, {})
             live_status = live.get("status", "-")
-            is_running  = live_status == "R" or events.get("isRunning", False)
+            if live_status in ("R", "P"):
+                # The real-time API gave an explicit status (running/paused) —
+                # trust it. The event log must never override an explicit P,
+                # since pausing a station doesn't emit a "station off" event
+                # and would otherwise make a paused zone look like it's running.
+                is_running  = live_status == "R"
+                final_status = live_status
+            else:
+                # No explicit live status — fall back to the event log's
+                # on/off tracking to infer whether the zone is running.
+                is_running   = events.get("isRunning", False)
+                final_status = "R" if is_running else live_status
             stations_data.append({
                 "id":               sid_key,
                 "name":             s.get("name"),
                 "terminal":         terminal,
-                "status":           "R" if is_running else live_status,
+                "status":           final_status,
                 "remaining":        live.get("remaining"),
                 "isRunning":        is_running,
                 "lastRun":          events.get("lastRun"),

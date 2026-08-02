@@ -174,7 +174,15 @@ async def _handle_stop_all_zones(call: ServiceCall) -> None:
     coordinators = _resolve_controller(hass, call.data.get("controller_entity"))
     api = coordinators["api"]
     realtime = coordinators["realtime"]
-    await hass.async_add_executor_job(api.stop_all_stations, realtime.satellite_id)
+    # Reuse the realtime coordinator's already-cached data instead of an
+    # extra live status call — zero additional API cost in the common case.
+    # None (no data yet) falls back to targeting every station.
+    running_ids = None
+    if realtime.data:
+        running_ids = [
+            s["id"] for s in realtime.data.get("stations", []) if s.get("isRunning")
+        ]
+    await hass.async_add_executor_job(api.stop_all_stations, realtime.satellite_id, running_ids)
     await realtime.async_request_refresh()
 
 
