@@ -171,13 +171,22 @@ def main():
     print("\n🔄 Polling GetRunStationStatusForSatellite and EventLog every 5s for 2 minutes...")
     print("   (keep the zone running during this time if possible)\n")
 
-    now = datetime.now(timezone.utc)
-    evt_start = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
-    evt_end = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
-
     poll_log = []
     for i in range(1, 25):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        # Recompute the time window fresh on every poll, anchored to "now" --
+        # exactly like get_event_logs() does on every real call. Reusing a
+        # fixed window (computed once outside this loop) made every request
+        # byte-for-byte identical across all 24 polls, which risked a cache
+        # hit (CDN/proxy/backend) serving the same stale response repeatedly
+        # regardless of HTTP client. This was likely the actual cause of the
+        # "frozen" results seen in earlier runs of this script, not a
+        # WAF/fingerprint or auth-channel difference.
+        poll_now = datetime.now(timezone.utc)
+        evt_start = (poll_now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+        evt_end = (poll_now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
+
         run_status, run_body = api.get(
             "ProgramStep/GetRunStationStatusForSatellite", {"satelliteId": satellite_id}
         )
@@ -203,7 +212,7 @@ def main():
 
     output_file = f"me3_diagnostic_{satellite_id}.json"
     results = {
-        "diagnostic_timestamp": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "diagnostic_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "satellite_id": satellite_id,
         "http_client": "curl_cffi (impersonate=chrome)",
         "snapshot": {
