@@ -132,6 +132,31 @@ def main():
     token = fetch_token_web(login_session, args.email, args.password)
     print("✅ Authenticated successfully")
 
+    # Clock check: compare local time against the server's own HTTP Date
+    # header. A drifting local clock makes event timestamps look "frozen" or
+    # "in the future" even when the data is perfectly fresh -- this bit us
+    # during development of this script, so it's worth flagging up front.
+    try:
+        probe = login_session.get(f"{API_BASE}/Satellite/GetSatelliteList")
+        server_date_hdr = probe.headers.get("Date")
+        if server_date_hdr:
+            from email.utils import parsedate_to_datetime
+            server_time = parsedate_to_datetime(server_date_hdr)
+            local_time = datetime.now(timezone.utc)
+            drift = (local_time - server_time).total_seconds()
+            if abs(drift) > 30:
+                print(
+                    f"⚠️  Clock drift detected: your system clock is "
+                    f"{drift:+.0f}s relative to the Rain Bird server. "
+                    f"Event timestamps in the output may look off -- this is "
+                    f"a local clock issue, not a data issue. Consider "
+                    f"checking your system's time sync (NTP/chrony)."
+                )
+            else:
+                print(f"✅ Clock check OK (drift: {drift:+.0f}s)")
+    except Exception:
+        pass  # non-critical, don't block the diagnostic over this
+
     api = API(token)
 
     print("\n🔍 Step 2: Discovering controllers...")
