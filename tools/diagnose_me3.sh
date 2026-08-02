@@ -1,245 +1,225 @@
-#!/bin/bash
-# Rain Bird IQ4 - ESP-ME3 Diagnostic Script (issues #9 and #10)
-# Captures GetRunStationStatusForSatellite, EventLog, GetSatellite and
-# GetProgramList behavior, including real HTTP status codes, both as a
-# one-time snapshot (for Controller Mode / Program Status / Calendar - issue #10)
-# and polled during a manual single-zone start (for issue #9).
-# Usage: ./diagnose_me3.sh your@email.com yourpassword
-# Compatible with Linux and macOS
-# Output: me3_diagnostic_SATELLITEID.json
+#!/usr/bin/env python3
+"""
+Rain Bird IQ4 - ESP-ME3 Diagnostic Script (v2, curl_cffi)
 
-set +e
-set -uo pipefail
+Same purpose as diagnose_me3.sh (issues #9 and #10), but uses curl_cffi with
+impersonate="chrome" for every request -- not just login -- exactly like the
+integration itself (see api.py). The plain-curl bash version was showing
+stale GetRunStationStatusForSatellite / EventLog responses (HTTP 200, but
+content that never reflected a manual zone start) while Home Assistant, using
+curl_cffi, picked up the same change within one ~30s poll cycle. This points
+to Rain Bird's WAF/CDN serving a degraded or cached response to clients that
+don't fingerprint as a real browser, rather than an auth-channel or
+controller-model difference. This script rules that variable out.
 
-if [[ $# -lt 2 ]]; then
-  echo "Usage: $0 <email> <password>"
-  exit 1
-fi
-
-USERNAME="$1"
-PASSWORD="$2"
-
-echo "🌧️  Rain Bird IQ4 ESP-ME3 Diagnostic (issues #9 & #10)"
-echo "=========================================="
-echo ""
-
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
-
-CLIENT_ID="C5A6F324-3CD3-4B22-9F78-B4835BA55D25"
-AUTH_URL_BASE="https://iq4server.rainbird.com/coreidentityserver"
-API_BASE="https://iq4server.rainbird.com/coreapi/api"
-USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-
-STATE=$(openssl rand -hex 8 | tr 'a-f' 'A-F')
-NONCE=$(openssl rand -hex 8 | tr 'a-f' 'A-F')
-
-RETURN_URL_RAW="/coreidentityserver/connect/authorize/callback?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Fiq4.rainbird.com%2Fauth.html&response_type=id_token%20token&scope=coreAPI.read%20coreAPI.write%20openid%20profile&state=${STATE}&nonce=${NONCE}"
-URL_ENCODED_RETURN=$(python3 -c "import urllib.parse, sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$RETURN_URL_RAW")
-LOGIN_URL="$AUTH_URL_BASE/Account/Login?ReturnUrl=$URL_ENCODED_RETURN"
-
-echo "🔐 Step 1: Authenticating..."
-curl -s -c "$TMPDIR/cookies.txt" -A "$USER_AGENT" "$LOGIN_URL" -o "$TMPDIR/login.html"
-
-TOKEN=$(grep -o 'name="__RequestVerificationToken"[^>]*value="[^"]*"' "$TMPDIR/login.html" | sed 's/.*value="\([^"]*\)".*/\1/' | head -n 1)
-
-if [[ -z "$TOKEN" ]]; then
-  echo "❌ Failed to get login page. Check your internet connection."
-  exit 1
-fi
-
-curl -s -b "$TMPDIR/cookies.txt" -c "$TMPDIR/cookies.txt" -A "$USER_AGENT" -L \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "Username=$USERNAME" \
-  -d "Password=$PASSWORD" \
-  --data-urlencode "ReturnUrl=$RETURN_URL_RAW" \
-  --data-urlencode "__RequestVerificationToken=$TOKEN" \
-  "$LOGIN_URL" -o "$TMPDIR/response.html" -D "$TMPDIR/headers.txt"
-
-ACCESS_TOKEN=$(sed -n 's/.*access_token=\([^&"]*\).*/\1/p' "$TMPDIR/response.html" | head -n 1)
-if [[ -z "$ACCESS_TOKEN" ]]; then
-  ACCESS_TOKEN=$(sed -n 's/.*access_token=\([^&"]*\).*/\1/p' "$TMPDIR/headers.txt" | head -n 1)
-fi
-
-if [[ -z "$ACCESS_TOKEN" ]]; then
-  echo "❌ Authentication failed. Check your username and password."
-  exit 1
-fi
-
-echo "✅ Authenticated successfully"
-echo ""
-
-# api_get_with_status: performs a GET and captures both body and HTTP status.
-# Writes body to $1 (a file path) and echoes the status code.
-api_get_with_status() {
-  local endpoint="$1"
-  local params="${2:-}"
-  local outfile="$3"
-  local url="$API_BASE/$endpoint"
-  if [[ -n "$params" ]]; then
-    url="$url?$params"
-  fi
-  curl -s -o "$outfile" -w "%{http_code}" \
-       -H "Authorization: Bearer $ACCESS_TOKEN" \
-       -H "Accept: application/json" \
-       "$url"
-}
-
-api_post_with_status() {
-  local endpoint="$1"
-  local body="$2"
-  local params="${3:-}"
-  local outfile="$4"
-  local url="$API_BASE/$endpoint"
-  if [[ -n "$params" ]]; then
-    url="$url?$params"
-  fi
-  curl -s -o "$outfile" -w "%{http_code}" -X POST \
-       -H "Authorization: Bearer $ACCESS_TOKEN" \
-       -H "Accept: application/json" \
-       -H "Content-Type: application/json" \
-       -d "$body" \
-       "$url"
-}
-
-echo "🔍 Step 2: Discovering controllers..."
-SATELLITE_LIST=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "Accept: application/json" \
-  "$API_BASE/Satellite/GetSatelliteList?includeInvisibleToCurrentUser=false")
-
-if [[ -z "$SATELLITE_LIST" ]] || [[ "$SATELLITE_LIST" == "null" ]]; then
-  echo "❌ No controllers found."
-  exit 1
-fi
-
-echo "✅ Controllers found:"
-python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for i, s in enumerate(data):
-    print(f\"  [{i}] {s.get('name','?')} (ID: {s.get('id','?')}, Type: {s.get('type','?')})\")
-" <<< "$SATELLITE_LIST"
-echo ""
-
-if python3 -c "import sys,json; d=json.loads(sys.argv[1]); sys.exit(0 if len(d)>1 else 1)" "$SATELLITE_LIST" 2>/dev/null; then
-  read -rp "Multiple controllers found. Enter the index of the one to test: " SAT_INDEX
-else
-  SAT_INDEX=0
-fi
-
-SATELLITE_ID=$(python3 -c "import sys,json; d=json.loads(sys.argv[1]); print(d[int(sys.argv[2])]['id'])" "$SATELLITE_LIST" "$SAT_INDEX")
-echo "📡 Using Satellite ID: $SATELLITE_ID"
-echo ""
-
-echo "🔍 Step 3: One-time snapshot of related endpoints (for issue #10 context)..."
-S_GETSATELLITE=$(api_get_with_status "Satellite/GetSatellite" "satelliteId=$SATELLITE_ID" "$TMPDIR/getsatellite.json")
-echo "  GetSatellite: HTTP $S_GETSATELLITE"
-S_GETPROGRAMS=$(api_get_with_status "Program/GetProgramList" "satelliteId=$SATELLITE_ID" "$TMPDIR/getprograms.json")
-echo "  GetProgramList: HTTP $S_GETPROGRAMS"
-echo ""
-
-echo "🔍 Step 4: Station list..."
-STATIONS=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" -H "Accept: application/json" \
-  "$API_BASE/Station/GetStationListForSatellite?satelliteId=$SATELLITE_ID")
-python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for s in data:
-    print(f\"  - {s.get('name','?')} (station id: {s.get('id','?')}, terminal: {s.get('terminal','?')})\")
-" <<< "$STATIONS"
-echo ""
-
-echo "=========================================================="
-echo "  NOW: start a SINGLE zone manually (from the Rain Bird"
-echo "  app or via Home Assistant), the way you normally would"
-echo "  when reproducing the bug. Do it in the next 15 seconds."
-echo "=========================================================="
-sleep 15
-
-echo ""
-echo "🔄 Polling GetRunStationStatusForSatellite and EventLog every 5s for 2 minutes..."
-echo "   (keep the zone running during this time if possible)"
-echo ""
-
-NOW_UTC=$(date -u +%Y-%m-%dT%H:%M:%S)
-if date -v-1H +%Y-%m-%dT%H:%M:%S > /dev/null 2>&1; then
-  EVT_START=$(date -u -v-1H +%Y-%m-%dT%H:%M:%S)
-  EVT_END=$(date -u -v+10M +%Y-%m-%dT%H:%M:%S)
-else
-  EVT_START=$(date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%S)
-  EVT_END=$(date -u -d '10 minutes' +%Y-%m-%dT%H:%M:%S)
-fi
-
-POLL_LOG="[]"
-for i in $(seq 1 24); do
-  TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-  ST_RUN=$(api_get_with_status "ProgramStep/GetRunStationStatusForSatellite" "satelliteId=$SATELLITE_ID" "$TMPDIR/run_$i.json")
-  ST_EVT=$(api_post_with_status "EventLog/GetEventLogsBySatelliteIds_V2" "[$SATELLITE_ID]" \
-    "startTime=$EVT_START&endTime=$EVT_END&types=15&includeAcknowledgedAlarms=true&includeAcknowledgedWarnings=true" \
-    "$TMPDIR/evt_$i.json")
-
-  echo "  [$i/24] $TS  RunStationStatus=HTTP $ST_RUN  EventLog=HTTP $ST_EVT"
-
-  POLL_LOG=$(python3 -c "
-import json, sys
-
-def safe_parse(path):
-    try:
-        with open(path) as f:
-            content = f.read()
-        if not content.strip():
-            return None
-        return json.loads(content)
-    except Exception as e:
-        return {'_parse_error': str(e)}
-
-log = json.loads(sys.argv[1])
-log.append({
-    'poll': $i,
-    'timestamp': '$TS',
-    'run_station_status': {'http_status': '$ST_RUN', 'body': safe_parse('$TMPDIR/run_$i.json')},
-    'event_log':          {'http_status': '$ST_EVT', 'body': safe_parse('$TMPDIR/evt_$i.json')},
-})
-print(json.dumps(log))
-" "$POLL_LOG")
-
-  sleep 5
-done
-
-OUTPUT_FILE="me3_diagnostic_${SATELLITE_ID}.json"
-
-python3 << PYEOF
+Usage: python3 diagnose_me3.py <email> <password> [--channel web|app]
+Requires: pip install curl_cffi
+Output: me3_diagnostic_v2_<satelliteId>.json
+"""
+import argparse
 import json
+import re
+import secrets
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
-def safe_parse(path):
-    try:
-        with open(path) as f:
-            content = f.read()
-        if not content.strip():
-            return None
-        return json.loads(content)
-    except Exception as e:
-        return {"_parse_error": str(e)}
+try:
+    from curl_cffi import requests as cf
+except ImportError:
+    print("Missing dependency. Install it with: pip install curl_cffi")
+    sys.exit(1)
 
-results = {
-    "diagnostic_timestamp": "$NOW_UTC",
-    "satellite_id": "$SATELLITE_ID",
-    "snapshot": {
-        "GetSatelliteList": json.loads('''$SATELLITE_LIST'''),
-        "GetSatellite":    {"http_status": "$S_GETSATELLITE", "body": safe_parse("$TMPDIR/getsatellite.json")},
-        "GetProgramList":  {"http_status": "$S_GETPROGRAMS",  "body": safe_parse("$TMPDIR/getprograms.json")},
-    },
-    "polling_during_manual_start": json.loads('''$POLL_LOG'''),
-}
+AUTH_BASE = "https://iq4server.rainbird.com/coreidentityserver"
+API_BASE = "https://iq4server.rainbird.com/coreapi/api"
+CLIENT_ID_WEB = "C5A6F324-3CD3-4B22-9F78-B4835BA55D25"
+CLIENT_ID_APP = "5B0FA4CD-3CD3-4B22-9F78-B4835BA55D25"
 
-with open("$OUTPUT_FILE", "w") as f:
-    json.dump(results, f, indent=2)
 
-print("")
-print("✅ Diagnostic complete!")
-print(f"📄 Results saved to: $OUTPUT_FILE")
-PYEOF
+def fetch_token_web(session: cf.Session, username: str, password: str) -> str:
+    """Web/IQ channel login -- mirrors auth.py's fetch_token()."""
+    state = secrets.token_hex(8).upper()
+    nonce = secrets.token_hex(8).upper()
+    return_url_raw = (
+        "/coreidentityserver/connect/authorize/callback"
+        f"?client_id={CLIENT_ID_WEB}"
+        "&redirect_uri=https%3A%2F%2Fiq4.rainbird.com%2Fauth.html"
+        "&response_type=id_token%20token"
+        "&scope=coreAPI.read%20coreAPI.write%20openid%20profile"
+        f"&state={state}&nonce={nonce}"
+    )
+    return_url_encoded = quote(return_url_raw, safe="")
+    login_url = f"{AUTH_BASE}/Account/Login?ReturnUrl={return_url_encoded}"
 
-echo ""
-echo "Please share the file '$OUTPUT_FILE' in the GitHub issue."
-echo "⚠️  The file contains your satellite ID and station data but NOT your password or token."
+    r1 = session.get(login_url)
+    if r1.status_code != 200:
+        raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
+
+    match = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text)
+    if not match:
+        raise RuntimeError("CSRF token not found in login page")
+    csrf = match.group(1)
+
+    r2 = session.post(
+        login_url,
+        data={
+            "Username": username,
+            "Password": password,
+            "ReturnUrl": return_url_raw,
+            "__RequestVerificationToken": csrf,
+        },
+        allow_redirects=True,
+    )
+
+    access_token = None
+    for text in (r2.url, r2.text):
+        m = re.search(r"access_token=([^&\"]+)", text or "")
+        if m:
+            access_token = m.group(1)
+            break
+    if not access_token:
+        raise RuntimeError("Authentication failed. Check your username and password.")
+    return access_token
+
+
+class API:
+    def __init__(self, token: str):
+        self.session = cf.Session(impersonate="chrome")
+        self.token = token
+
+    def get(self, path: str, params: dict | None = None):
+        r = self.session.get(
+            f"{API_BASE}/{path}",
+            params=params,
+            headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json"},
+            timeout=30,
+        )
+        body = None
+        try:
+            body = r.json() if r.text.strip() else None
+        except Exception as e:
+            body = {"_parse_error": str(e), "_raw": r.text[:500]}
+        return r.status_code, body
+
+    def post(self, path: str, json_body=None, params: dict | None = None):
+        r = self.session.post(
+            f"{API_BASE}/{path}",
+            params=params,
+            json=json_body,
+            headers={"Authorization": f"Bearer {self.token}", "Accept": "application/json"},
+            timeout=30,
+        )
+        body = None
+        try:
+            body = r.json() if r.text.strip() else None
+        except Exception as e:
+            body = {"_parse_error": str(e), "_raw": r.text[:500]}
+        return r.status_code, body
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("email")
+    parser.add_argument("password")
+    args = parser.parse_args()
+
+    print("🌧️  Rain Bird IQ4 ESP-ME3 Diagnostic v2 (curl_cffi)")
+    print("=" * 55)
+
+    print("\n🔐 Step 1: Authenticating (web channel, curl_cffi impersonate=chrome)...")
+    login_session = cf.Session(impersonate="chrome")
+    token = fetch_token_web(login_session, args.email, args.password)
+    print("✅ Authenticated successfully")
+
+    api = API(token)
+
+    print("\n🔍 Step 2: Discovering controllers...")
+    status, satellites = api.get("Satellite/GetSatelliteList", {"includeInvisibleToCurrentUser": "false"})
+    if status != 200 or not satellites:
+        print(f"❌ Could not list controllers (HTTP {status})")
+        sys.exit(1)
+
+    for i, s in enumerate(satellites):
+        print(f"  [{i}] {s.get('name','?')} (ID: {s.get('id','?')}, Type: {s.get('type','?')})")
+
+    if len(satellites) > 1:
+        idx = int(input("Multiple controllers found. Enter the index to test: "))
+    else:
+        idx = 0
+    satellite_id = satellites[idx]["id"]
+    print(f"\n📡 Using Satellite ID: {satellite_id}")
+
+    print("\n🔍 Step 3: One-time snapshot (issue #10 context)...")
+    s_sat_status, s_sat_body = api.get("Satellite/GetSatellite", {"satelliteId": satellite_id})
+    print(f"  GetSatellite: HTTP {s_sat_status}")
+    s_prog_status, s_prog_body = api.get("Program/GetProgramList", {"satelliteId": satellite_id})
+    print(f"  GetProgramList: HTTP {s_prog_status}")
+
+    print("\n🔍 Step 4: Station list...")
+    _, stations = api.get("Station/GetStationListForSatellite", {"satelliteId": satellite_id})
+    for s in stations or []:
+        print(f"  - {s.get('name','?')} (station id: {s.get('id','?')}, terminal: {s.get('terminal','?')})")
+
+    print("\n" + "=" * 58)
+    print("  NOW: start a SINGLE zone manually (app or Home Assistant),")
+    print("  the way you normally would when reproducing the bug.")
+    print("  You have 15 seconds.")
+    print("=" * 58)
+    time.sleep(15)
+
+    print("\n🔄 Polling GetRunStationStatusForSatellite and EventLog every 5s for 2 minutes...")
+    print("   (keep the zone running during this time if possible)\n")
+
+    now = datetime.now(timezone.utc)
+    evt_start = (now - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S")
+    evt_end = (now + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    poll_log = []
+    for i in range(1, 25):
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        run_status, run_body = api.get(
+            "ProgramStep/GetRunStationStatusForSatellite", {"satelliteId": satellite_id}
+        )
+        evt_status, evt_body = api.post(
+            "EventLog/GetEventLogsBySatelliteIds_V2",
+            json_body=[satellite_id],
+            params={
+                "startTime": evt_start,
+                "endTime": evt_end,
+                "types": 15,
+                "includeAcknowledgedAlarms": "true",
+                "includeAcknowledgedWarnings": "true",
+            },
+        )
+        print(f"  [{i}/24] {ts}  RunStationStatus=HTTP {run_status}  EventLog=HTTP {evt_status}")
+        poll_log.append({
+            "poll": i,
+            "timestamp": ts,
+            "run_station_status": {"http_status": run_status, "body": run_body},
+            "event_log": {"http_status": evt_status, "body": evt_body},
+        })
+        time.sleep(5)
+
+    output_file = f"me3_diagnostic_v2_{satellite_id}.json"
+    results = {
+        "diagnostic_timestamp": now.strftime("%Y-%m-%dT%H:%M:%S"),
+        "satellite_id": satellite_id,
+        "http_client": "curl_cffi (impersonate=chrome)",
+        "snapshot": {
+            "GetSatelliteList": satellites,
+            "GetSatellite": {"http_status": s_sat_status, "body": s_sat_body},
+            "GetProgramList": {"http_status": s_prog_status, "body": s_prog_body},
+        },
+        "polling_during_manual_start": poll_log,
+    }
+    with open(output_file, "w") as f:
+        json.dump(results, f, indent=2, default=str)
+
+    print(f"\n✅ Diagnostic complete!\n📄 Results saved to: {output_file}")
+    print("\nPlease share this file in the GitHub issue.")
+    print("⚠️  The file contains your satellite ID and station data but NOT your password or token.")
+
+
+if __name__ == "__main__":
+    main()
