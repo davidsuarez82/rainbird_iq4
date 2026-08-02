@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rain Bird IQ4 - ESP-ME3 Diagnostic Script (v2, curl_cffi)
+Rain Bird IQ4 - ESP-ME3 Diagnostic Script (curl_cffi)
 
 Same purpose as diagnose_me3.sh (issues #9 and #10), but uses curl_cffi with
 impersonate="chrome" for every request -- not just login -- exactly like the
@@ -14,7 +14,7 @@ controller-model difference. This script rules that variable out.
 
 Usage: python3 diagnose_me3.py <email> <password> [--channel web|app]
 Requires: pip install curl_cffi
-Output: me3_diagnostic_v2_<satelliteId>.json
+Output: me3_diagnostic_<satelliteId>.json
 """
 import argparse
 import json
@@ -201,7 +201,7 @@ def main():
         })
         time.sleep(5)
 
-    output_file = f"me3_diagnostic_v2_{satellite_id}.json"
+    output_file = f"me3_diagnostic_{satellite_id}.json"
     results = {
         "diagnostic_timestamp": now.strftime("%Y-%m-%dT%H:%M:%S"),
         "satellite_id": satellite_id,
