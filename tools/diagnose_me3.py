@@ -17,13 +17,15 @@ Requires: pip install curl_cffi
 Output: me3_diagnostic_<satelliteId>.json
 """
 import argparse
+import base64
+import hashlib
 import json
 import re
 import secrets
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlparse, parse_qs
 
 try:
     from curl_cffi import requests as cf
@@ -33,8 +35,24 @@ except ImportError:
 
 AUTH_BASE = "https://iq4server.rainbird.com/coreidentityserver"
 API_BASE = "https://iq4server.rainbird.com/coreapi/api"
+
+# Web/IQ channel
 CLIENT_ID_WEB = "C5A6F324-3CD3-4B22-9F78-B4835BA55D25"
-CLIENT_ID_APP = "5B0FA4CD-3CD3-4B22-9F78-B4835BA55D25"
+
+# Mobile app channel (Authorization Code + PKCE) -- mirrors const.py exactly
+APP_CLIENT_ID = "5B0FA4CD-8248-4BEB-B89A-F0AF8A254DB5"
+APP_CLIENT_SECRET = "537C58B6-DCCF-4718-BFE6-CCD0D3FCDC07"
+APP_REDIRECT_URI = "com.rainbird.mobile://auth"
+APP_SCOPE = "coreAPI.read coreAPI.write openid profile offline_access"
+_MAX_REDIRECTS = 10
+
+
+def _make_pkce_pair() -> tuple[str, str]:
+    """Generate a PKCE (code_verifier, code_challenge) pair using S256. Mirrors auth.py."""
+    verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+    digest = hashlib.sha256(verifier.encode()).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
+    return verifier, challenge
 
 
 def fetch_token_web(session: cf.Session, username: str, password: str) -> str:
@@ -83,6 +101,99 @@ def fetch_token_web(session: cf.Session, username: str, password: str) -> str:
     return access_token
 
 
+def fetch_token_app(session: cf.Session, username: str, password: str) -> str:
+    """Mobile-app channel login (Authorization Code + PKCE) -- mirrors auth.py's
+    fetch_token_isapp(). Not subject to the web-channel's IQ-Access-tier cap."""
+    state = secrets.token_hex(8).upper()
+    nonce = secrets.token_hex(8).upper()
+    code_verifier, code_challenge = _make_pkce_pair()
+
+    return_url_raw = (
+        "/coreidentityserver/connect/authorize/callback"
+        f"?client_id={APP_CLIENT_ID}"
+        f"&redirect_uri={quote(APP_REDIRECT_URI, safe='')}"
+        "&response_type=code"
+        f"&code_challenge={code_challenge}"
+        "&code_challenge_method=S256"
+        f"&scope={quote(APP_SCOPE, safe='')}"
+        f"&state={state}&nonce={nonce}"
+    )
+    login_url = f"{AUTH_BASE}/Account/Login?ReturnUrl={quote(return_url_raw, safe='')}"
+
+    r1 = session.get(login_url)
+    if r1.status_code != 200:
+        raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
+
+    match = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text)
+    if not match:
+        raise RuntimeError("CSRF token not found in login page")
+    csrf = match.group(1)
+
+    resp = session.post(
+        login_url,
+        data={
+            "Username": username,
+            "Password": password,
+            "ReturnUrl": return_url_raw,
+            "__RequestVerificationToken": csrf,
+        },
+        allow_redirects=False,
+    )
+
+    if resp.status_code == 200 and not (
+        resp.headers.get("location") or resp.headers.get("Location")
+    ):
+        raise RuntimeError(
+            "Login rejected (server returned the login page instead of "
+            "redirecting) -- check the username/password."
+        )
+
+    code = None
+    current_url = login_url
+    for _ in range(_MAX_REDIRECTS):
+        location = resp.headers.get("location") or resp.headers.get("Location")
+        if not location:
+            raise RuntimeError(f"No redirect while logging in (HTTP {resp.status_code}).")
+        absolute = urljoin(current_url, location)
+        parsed = urlparse(absolute)
+        found = parse_qs(parsed.query).get("code", [None])[0]
+        if found:
+            code = found
+            break
+        if parsed.scheme not in ("http", "https"):
+            raise RuntimeError(f"Reached final redirect but found no authorization code: {absolute}")
+        current_url = absolute
+        resp = session.get(current_url, allow_redirects=False)
+
+    if not code:
+        raise RuntimeError("Too many redirects while logging in -- no code found.")
+
+    basic = base64.b64encode(f"{APP_CLIENT_ID}:{APP_CLIENT_SECRET}".encode()).decode()
+    token_resp = session.post(
+        f"{AUTH_BASE}/connect/token",
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Accept": "*/*",
+        },
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "code_verifier": code_verifier,
+            "redirect_uri": APP_REDIRECT_URI,
+        },
+    )
+    if token_resp.status_code != 200:
+        raise RuntimeError(
+            f"Token exchange failed: HTTP {token_resp.status_code}, body: {token_resp.text[:200]}"
+        )
+
+    token = token_resp.json().get("access_token")
+    if not token:
+        raise RuntimeError("Token exchange succeeded but no access_token returned.")
+    return token
+
+
 class API:
     def __init__(self, token: str):
         self.session = cf.Session(impersonate="chrome")
@@ -122,14 +233,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("email")
     parser.add_argument("password")
+    parser.add_argument(
+        "--channel", choices=["web", "app"], default="web",
+        help="Authentication channel to test (default: web). Use 'app' to match "
+             "the integration's Mobile app channel setting.",
+    )
     args = parser.parse_args()
 
-    print("🌧️  Rain Bird IQ4 ESP-ME3 Diagnostic v2 (curl_cffi)")
+    print("🌧️  Rain Bird IQ4 ESP-ME3 Diagnostic (curl_cffi)")
     print("=" * 55)
 
-    print("\n🔐 Step 1: Authenticating (web channel, curl_cffi impersonate=chrome)...")
+    print(f"\n🔐 Step 1: Authenticating (channel={args.channel}, curl_cffi impersonate=chrome)...")
     login_session = cf.Session(impersonate="chrome")
-    token = fetch_token_web(login_session, args.email, args.password)
+    if args.channel == "app":
+        token = fetch_token_app(login_session, args.email, args.password)
+    else:
+        token = fetch_token_web(login_session, args.email, args.password)
     print("✅ Authenticated successfully")
 
     # Clock check: compare local time against the server's own HTTP Date
@@ -235,11 +354,12 @@ def main():
         })
         time.sleep(5)
 
-    output_file = f"me3_diagnostic_{satellite_id}.json"
+    output_file = f"me3_diagnostic_{satellite_id}_{args.channel}.json"
     results = {
         "diagnostic_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
         "satellite_id": satellite_id,
         "http_client": "curl_cffi (impersonate=chrome)",
+        "auth_channel": args.channel,
         "snapshot": {
             "GetSatelliteList": satellites,
             "GetSatellite": {"http_status": s_sat_status, "body": s_sat_body},
