@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -181,6 +182,31 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         self.company_id = company_id
         self._consecutive_errors = 0
 
+        # station_id -> monotonic expiry timestamp. Set by a successful
+        # start_zone call (see __init__.py._handle_start_zone) and used to
+        # show a station as "running" for the requested duration.
+        #
+        # This exists because neither GetRunStationStatusForSatellite nor
+        # Rain Bird's real-time push channel (AWS AppSync) reflect
+        # manually-started zones — confirmed by direct API/traffic testing
+        # on 2026-08-06. The official app has the same blind spot and
+        # works around it with a local countdown timer instead of a
+        # confirmed hardware status; this does the same. Program-triggered
+        # runs do NOT need this — they're already correctly reflected by
+        # the live status endpoint.
+        self._optimistic_until: dict[int, float] = {}
+
+    def set_optimistic_running(self, station_id: int, duration_seconds: int) -> None:
+        """Mark a station as running locally for duration_seconds.
+
+        Call this ONLY after a start_station API call has succeeded (i.e.
+        did not raise) — an optimistic state must never be set for a
+        command that wasn't actually accepted by the backend.
+        """
+        # Small safety margin so we don't flip back to idle a beat before
+        # the physical valve actually closes.
+        self._optimistic_until[station_id] = time.monotonic() + duration_seconds + 5
+
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             data = await self.hass.async_add_executor_job(self._fetch_data)
@@ -240,6 +266,23 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                 # on/off tracking to infer whether the zone is running.
                 is_running   = events.get("isRunning", False)
                 final_status = "R" if is_running else live_status
+
+            # Optimistic override for manually-started zones. Manual starts
+            # never appear in GetRunStationStatusForSatellite, so live_status
+            # is always "-" for them here — meaning this only ever fires in
+            # the no-explicit-status branch above, and never overrides a
+            # real R/P from the API. See set_optimistic_running() docstring
+            # for why this exists.
+            optimistic_expiry = self._optimistic_until.get(sid_key)
+            if optimistic_expiry is not None:
+                if time.monotonic() < optimistic_expiry:
+                    if live_status not in ("R", "P"):
+                        is_running   = True
+                        final_status = "R"
+                else:
+                    # Expired — stop overriding, let real data speak.
+                    self._optimistic_until.pop(sid_key, None)
+
             stations_data.append({
                 "id":               sid_key,
                 "name":             s.get("name"),

@@ -193,6 +193,15 @@ class RainBirdAPI:
             "isGroupStart": False,
         })
 
+    def start_program(self, program_id: int) -> None:
+        """Start a saved program manually ("Program Run" in the official app).
+
+        Uses the program's own per-station run times — confirmed via
+        traffic capture (2026-08-06): the app posts a bare list of program
+        ids to this endpoint, with no satellite id or duration needed.
+        """
+        self._post("ManualOps/StartPrograms", json=[program_id])
+
     def stop_station(self, station_id: int) -> None:
         """Stop a station that is currently running."""
         self._post(

@@ -41,6 +41,7 @@ _FRONTEND_REGISTERED = False
 
 SERVICES = [
     "start_zone",
+    "start_program",
     "stop_zone",
     "stop_all_zones",
     "set_rain_delay",
@@ -158,8 +159,23 @@ async def _handle_start_zone(call: ServiceCall) -> None:
     hass = call.hass
     station_id, api, coordinator = _resolve_station(hass, call.data["station_entity"])
     duration = call.data["duration"]
-    await hass.async_add_executor_job(api.start_station, station_id, duration * 60)
+    duration_seconds = duration * 60
+    await hass.async_add_executor_job(api.start_station, station_id, duration_seconds)
+    # Only reached if the line above didn't raise — i.e. the backend
+    # actually accepted the command. See RainBirdCoordinator.set_optimistic_running
+    # for why this exists: neither the live-status endpoint nor Rain Bird's
+    # push channel reflect manually-started zones.
+    coordinator.set_optimistic_running(station_id, duration_seconds)
     await coordinator.async_request_refresh()
+
+
+async def _handle_start_program(call: ServiceCall) -> None:
+    hass = call.hass
+    program_id, api, program_coordinator = _resolve_program(hass, call.data["program_entity"])
+    await hass.async_add_executor_job(api.start_program, program_id)
+    # No optimistic state needed: program-triggered runs are already
+    # correctly reflected by GetRunStationStatusForSatellite.
+    await program_coordinator.async_request_refresh()
 
 
 async def _handle_stop_zone(call: ServiceCall) -> None:
@@ -238,6 +254,7 @@ async def _handle_weather_adjust_manual(call: ServiceCall) -> None:
 
 _SERVICE_HANDLERS = {
     "start_zone": _handle_start_zone,
+    "start_program": _handle_start_program,
     "stop_zone": _handle_stop_zone,
     "stop_all_zones": _handle_stop_all_zones,
     "set_rain_delay": _handle_set_rain_delay,

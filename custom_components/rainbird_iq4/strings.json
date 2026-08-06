@@ -5,11 +5,12 @@
         "title": "Rain Bird IQ4",
         "description": "Enter your Rain Bird IQ4 cloud account credentials.",
         "data": {
-          "username": "Email address",
+          "username": "Email address or account name",
           "password": "Password",
           "auth_channel": "Authentication channel"
         },
         "data_description": {
+          "username": "If login fails with an AWS WAF challenge (HTTP 202) using your email, try your Rain Bird account name instead. This is the editable display name found under Account Settings on the IQ4 website (e.g. \u201cJohn Smith\u201d) \u2014 not the numeric \u201cAccount ID\u201d shown in the mobile app, which won't work here.",
           "auth_channel": "How the integration logs in. Leave on \"Web portal\" for most accounts. Choose \"Mobile app\" only if zone control fails with a 403 error (e.g. US free-tier accounts)."
         }
       },

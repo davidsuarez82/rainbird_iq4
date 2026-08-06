@@ -168,6 +168,7 @@ Card options:
 | Action | Description |
 |---|---|
 | `rainbird_iq4.start_zone` | Start a zone manually (1–30 min) |
+| `rainbird_iq4.start_program` | Run a saved program manually (uses the program's own per-station run times) |
 | `rainbird_iq4.stop_zone` | Stop a running zone |
 | `rainbird_iq4.set_rain_delay` | Set rain delay in days (0 = clear) |
 | `rainbird_iq4.enable_forecast_rain_delay` | Enable forecast-based rain delay |
@@ -194,10 +195,23 @@ On **US-based accounts** without an active **IQ Access subscription**, Rain Bird
 
 This is a restriction on Rain Bird's account tiers, not a bug in this integration.
 
+### ME3: Program Status / Calendar / Controller Mode missing
+
+On some **ESP-ME3** accounts, Program Status sensors and Calendar entities don't get created, and Controller Mode shows "Off" despite an active schedule in the app. This happens when the web/IQ auth channel returns `403` or an unusable response on the endpoints these entities are built from — the same underlying account-tier restriction described above, just affecting a different set of endpoints.
+
+**Fix:** switch **Authentication channel** to **Mobile app** in the integration's **Configure** screen (same fix as the US zone-control 403). Confirmed to resolve this on an affected account. If you already switched to the app channel to fix zone control, these entities should already be working.
+
+### Manually-started zones: status is estimated, not confirmed
+
+When you start a zone manually (`start_zone`, or the app's own "Quick Run"/"Custom Run"), Rain Bird's cloud does not expose any real-time confirmation that the zone is actually running — neither the live-status endpoint nor the real-time push channel reflect manual starts (only program-triggered runs, including `start_program`, are reported this way). The official app has the same limitation and works around it with a local countdown based on the duration you requested, rather than a confirmed hardware status.
+
+This integration does the same: once a `start_zone` call is accepted by the backend, the station shows as "running" for the requested duration and then reverts to idle, regardless of what actually happens at the controller. If the physical run is interrupted early (e.g. a rain sensor override), the sensor may briefly show "running" after the fact. Program-triggered runs (including via `start_program`) don't have this limitation — their status is confirmed in near real time.
+
 ### Other limitations
 
 - **Unofficial API** — Rain Bird does not provide a public API. This integration reverse-engineers the IQ4 web app traffic. It may break if Rain Bird changes their backend.
 - **AWS WAF** — The Rain Bird cloud is protected by AWS WAF, which blocks standard HTTP clients. This integration uses `curl_cffi` to impersonate a browser. Excessive login attempts may trigger a temporary ban.
+- **AWS WAF JavaScript challenge on some accounts** — a small number of accounts hit a more aggressive WAF level that returns an HTTP 202 JavaScript challenge instead of HTTP 200, which `curl_cffi` cannot solve (it requires a real JS engine). If login fails this way, try entering your **Rain Bird account name** instead of your email in the login field — this has resolved it for at least one affected account (the account name is the editable display name under Account Settings on the IQ4 website, e.g. "John Smith" — not the numeric Account ID shown in the mobile app). There is currently no code fix for accounts where this workaround doesn't help.
 - **Cloud-dependent** — The integration requires an active internet connection and Rain Bird IQ4 cloud service. Local control is not supported.
 - **Token-based auth** — Authentication tokens are cached on disk and refreshed automatically every ~2 hours. A restart may briefly show entities as unavailable while the token is refreshed. Since v1.0.7 the cache lives in `/config/.storage/rainbird_iq4_token_<account-hash>.json` (one file per account, survives HACS updates). The old file at `custom_components/rainbird_iq4/rainbird_iq4_token.json` is unused and can be deleted.
 - **Timestamps in local time** — Rain Bird event log timestamps are in controller local time, not UTC.

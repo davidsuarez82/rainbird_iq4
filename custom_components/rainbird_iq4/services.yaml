@@ -25,6 +25,21 @@ start_zone:
           unit_of_measurement: min
           mode: slider
 
+start_program:
+  name: Start Program
+  description: Run a saved program manually (equivalent to "Program Run" in the app). Uses the program's own per-station run times.
+  fields:
+    program_entity:
+      name: Program
+      description: The program to run. Select a Program Status sensor.
+      required: true
+      selector:
+        entity:
+          filter:
+            - integration: rainbird_iq4
+              domain: sensor
+              device_class: enum
+
 stop_zone:
   name: Stop Zone
   description: Stop a zone that is currently running.
