@@ -101,7 +101,7 @@ def fetch_token_web(session: cf.Session, username: str, password: str) -> str:
     return access_token
 
 
-def fetch_token_app(session: cf.Session, username: str, password: str) -> str:
+def fetch_token_app(session: cf.Session, username: str, password: str, verbose: bool = False) -> str:
     """Mobile-app channel login (Authorization Code + PKCE) -- mirrors auth.py's
     fetch_token_isapp(). Not subject to the web-channel's IQ-Access-tier cap."""
     state = secrets.token_hex(8).upper()
@@ -121,6 +121,8 @@ def fetch_token_app(session: cf.Session, username: str, password: str) -> str:
     login_url = f"{AUTH_BASE}/Account/Login?ReturnUrl={quote(return_url_raw, safe='')}"
 
     r1 = session.get(login_url)
+    if verbose:
+        print(f"  [verbose] GET login page: HTTP {r1.status_code}, {len(r1.text)} bytes")
     if r1.status_code != 200:
         raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
 
@@ -140,12 +142,21 @@ def fetch_token_app(session: cf.Session, username: str, password: str) -> str:
         allow_redirects=False,
     )
 
+    if verbose:
+        loc = resp.headers.get("location") or resp.headers.get("Location")
+        print(f"  [verbose] POST credentials: HTTP {resp.status_code}, location={loc!r}")
+        print(f"  [verbose] response headers: {dict(resp.headers)}")
+
     if resp.status_code == 200 and not (
         resp.headers.get("location") or resp.headers.get("Location")
     ):
+        snippet = re.sub(r"<script.*?</script>", "", resp.text, flags=re.S)
+        snippet = re.sub(r"\s+", " ", snippet).strip()[:600]
         raise RuntimeError(
             "Login rejected (server returned the login page instead of "
-            "redirecting) -- check the username/password."
+            "redirecting) -- this may not be a credentials problem (e.g. rate "
+            "limiting after repeated login attempts). Response body snippet:\n"
+            f"{snippet}"
         )
 
     code = None
@@ -238,6 +249,11 @@ def main():
         help="Authentication channel to test (default: web). Use 'app' to match "
              "the integration's Mobile app channel setting.",
     )
+    parser.add_argument(
+        "--verbose", action="store_true",
+        help="Print extra detail about the login flow (status codes, headers, "
+             "and a snippet of the response body if login is rejected).",
+    )
     args = parser.parse_args()
 
     print("🌧️  Rain Bird IQ4 ESP-ME3 Diagnostic (curl_cffi)")
@@ -246,7 +262,7 @@ def main():
     print(f"\n🔐 Step 1: Authenticating (channel={args.channel}, curl_cffi impersonate=chrome)...")
     login_session = cf.Session(impersonate="chrome")
     if args.channel == "app":
-        token = fetch_token_app(login_session, args.email, args.password)
+        token = fetch_token_app(login_session, args.email, args.password, verbose=args.verbose)
     else:
         token = fetch_token_web(login_session, args.email, args.password)
     print("✅ Authenticated successfully")
