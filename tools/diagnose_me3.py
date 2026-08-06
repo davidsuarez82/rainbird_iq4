@@ -322,11 +322,11 @@ def main():
         print(f"  - {s.get('name','?')} (station id: {s.get('id','?')}, terminal: {s.get('terminal','?')})")
 
     print("\n" + "=" * 58)
-    print("  NOW: start a SINGLE zone manually (app or Home Assistant),")
-    print("  the way you normally would when reproducing the bug.")
-    print("  You have 15 seconds.")
+    print("  Get ready to start a SINGLE zone manually (app or Home")
+    print("  Assistant), the way you normally would when reproducing")
+    print("  the bug.")
     print("=" * 58)
-    time.sleep(15)
+    input("  Start the zone now, THEN press Enter here to begin polling... ")
 
     print("\n🔄 Polling GetRunStationStatusForSatellite and EventLog every 5s for 2 minutes...")
     print("   (keep the zone running during this time if possible)\n")
