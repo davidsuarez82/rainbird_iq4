@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -209,6 +210,28 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         self._consecutive_errors = 0
         self._manual_stops: dict[int, datetime] = {}
 
+        # station_id -> monotonic expiry timestamp, set by a successful
+        # start_zone call (see __init__.py._handle_start_zone). Neither
+        # GetRunStationStatusForSatellite nor Rain Bird's AppSync push
+        # channel reflect manually-started zones — the official app has
+        # the same blind spot and works around it with a local countdown
+        # instead of a confirmed hardware status. Program-triggered runs
+        # do NOT need this; the live status endpoint reports them fine.
+        self._optimistic_until: dict[int, float] = {}
+
+    def set_optimistic_running(self, station_id: int, duration_seconds: int) -> None:
+        """Mark a station as running locally for duration_seconds.
+
+        Call this ONLY after a start_station API call has succeeded (i.e.
+        did not raise) — an optimistic state must never be set for a
+        command the backend didn't accept.
+        """
+        # Small safety margin so we don't flip back to idle a beat before
+        # the physical valve actually closes.
+        self._optimistic_until[station_id] = time.monotonic() + duration_seconds + 5
+        # A fresh start supersedes any pending manual-stop override.
+        self._manual_stops.pop(station_id, None)
+
     def mark_stopped(self, station_id: int) -> None:
         """Record that we just asked Rain Bird to stop this station.
 
@@ -218,6 +241,8 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         fresh ON event timestamped after this call).
         """
         self._manual_stops[station_id] = datetime.now()
+        # A stop supersedes any pending optimistic-run countdown.
+        self._optimistic_until.pop(station_id, None)
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
@@ -294,6 +319,22 @@ class RainBirdCoordinator(DataUpdateCoordinator):
             # up. If we asked to stop this station, don't believe a "still
             # running" result from either source unless a fresher ON event
             # proves a genuine new start happened since then.
+            # Optimistic override for manually-started zones. Manual
+            # starts never appear in GetRunStationStatusForSatellite, so
+            # live_status is always "-" for them here — this only ever
+            # fires in the no-explicit-status branch above and never
+            # overrides a real R/P from the API. Evaluated before the
+            # manual-stop override below so that a stop always wins.
+            optimistic_expiry = self._optimistic_until.get(sid_key)
+            if optimistic_expiry is not None:
+                if time.monotonic() < optimistic_expiry:
+                    if live_status not in ("R", "P"):
+                        is_running   = True
+                        final_status = "R"
+                else:
+                    # Expired — stop overriding, let real data speak.
+                    self._optimistic_until.pop(sid_key, None)
+
             stop_requested_at = self._manual_stops.get(sid_key)
             if stop_requested_at is not None:
                 last_on = _parse_event_timestamp(events.get("lastRun"))
