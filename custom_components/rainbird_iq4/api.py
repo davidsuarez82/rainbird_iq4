@@ -98,6 +98,18 @@ class RainBirdAPI:
             r = session.request(method, url, json=json, params=params,
                                 headers=self._auth.get_headers(), timeout=30)
 
+        # Manual control commands are fire-and-forget: start_station and its
+        # siblings discard the response body, so a backend that accepts the
+        # request without acting on it leaves no trace at all. DukeMini (#13)
+        # reports zone starts that silently do nothing and only take effect on
+        # a second attempt, with nothing in the log. Record what the backend
+        # actually replied so the next report carries the evidence.
+        if path.startswith("ManualOps/"):
+            _LOGGER.debug(
+                "ManualOps reply: %s %s -> HTTP %s, body: %s",
+                method, path, r.status_code, (r.text or "")[:300] or "<empty>",
+            )
+
         r.raise_for_status()
         return r.json() if r.text.strip() else None
 
