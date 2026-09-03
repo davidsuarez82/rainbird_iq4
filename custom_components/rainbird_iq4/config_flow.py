@@ -16,7 +16,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .api import RainBirdAPI
-from .auth import RainBirdAuth
+from .auth import RainBirdAuth, RainBirdAuthRejected, RainBirdWafChallenge
 from .const import (
     AUTH_CHANNEL_APP,
     AUTH_CHANNEL_WEB,
@@ -101,6 +101,12 @@ class RainBirdConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except ValueError as err:
                 errors["base"] = "no_controllers"
                 _LOGGER.error("No controllers found: %s", err)
+            except RainBirdWafChallenge as err:
+                errors["base"] = "waf_challenge"
+                _LOGGER.error("AWS WAF challenge during login: %s", err)
+            except RainBirdAuthRejected as err:
+                errors["base"] = "invalid_auth"
+                _LOGGER.error("Login rejected: %s", err)
             except RuntimeError as err:
                 errors["base"] = "cannot_connect"
                 _LOGGER.error("Connection error: %s", err)

@@ -23,6 +23,8 @@
       }
     },
     "error": {
+      "invalid_auth": "Login rejected. Check your username and password, and try signing in at https://iq4.rainbird.com \u2014 the account may need a password change or new terms accepted.",
+      "waf_challenge": "Rain Bird's bot protection blocked the login before it reached the sign-in form. This is not a credentials problem and is usually temporary \u2014 wait a few minutes and try again.",
       "cannot_connect": "Failed to connect. Check your credentials and internet connection, then try again.",
       "no_controllers": "No controllers were found on this account.",
       "unknown": "An unexpected error occurred. See the logs for details."

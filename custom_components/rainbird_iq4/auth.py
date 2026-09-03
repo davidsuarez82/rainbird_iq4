@@ -32,6 +32,67 @@ _LOGGER = logging.getLogger(__name__)
 
 _MAX_REDIRECTS = 10
 
+# AWS WAF serves its JavaScript challenge instead of the real page. It
+# answers with 202 (challenge issued), and sometimes 405/429 under load.
+# The challenge body always carries one of these markers, so a 200 that
+# contains them is a challenge too.
+_WAF_STATUS = frozenset({202, 405, 429})
+_WAF_MARKERS = ("gokuProps", "challenge.js", "awswaf", "token.awswaf.com")
+
+_WAF_MESSAGE = (
+    "AWS WAF served a JavaScript challenge instead of the Rain Bird login "
+    "page (HTTP {status}). This is not a credentials problem — the request "
+    "never reached the login form. It is usually intermittent; wait a few "
+    "minutes and try again."
+)
+
+
+class RainBirdWafChallenge(RuntimeError):
+    """AWS WAF intercepted the request with a JavaScript challenge.
+
+    Subclasses RuntimeError so existing callers that only catch
+    RuntimeError keep working unchanged.
+    """
+
+
+class RainBirdAuthRejected(RuntimeError):
+    """The identity server returned the login page instead of a token.
+
+    Means the credentials were refused, or the account is in a state that
+    needs attention in the web portal (forced password change, accepting
+    new terms, temporary lockout).
+    """
+
+
+def _looks_like_waf(resp) -> bool:
+    """Return True if the response is an AWS WAF challenge rather than content."""
+    if resp.status_code in _WAF_STATUS:
+        return True
+    try:
+        body = resp.text or ""
+    except Exception:
+        return False
+    return any(marker in body for marker in _WAF_MARKERS)
+
+
+def _extract_csrf(resp) -> str:
+    """Validate a login-page response and return its CSRF token.
+
+    Shared by both auth channels so the WAF is reported identically
+    whichever one the user picked.
+    """
+    if _looks_like_waf(resp):
+        raise RainBirdWafChallenge(_WAF_MESSAGE.format(status=resp.status_code))
+    if resp.status_code != 200:
+        raise RuntimeError(f"Login page failed: HTTP {resp.status_code}")
+
+    match = re.search(
+        r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', resp.text
+    )
+    if not match:
+        raise RuntimeError("CSRF token not found in login page")
+    return match.group(1)
+
 
 def _decode_jwt_exp(token: str) -> int:
     """Extract expiration timestamp from JWT payload."""
@@ -68,16 +129,7 @@ def fetch_token(username: str, password: str) -> str:
 
     with cf.Session(impersonate="chrome") as session:
         # Step 1: load login page and extract CSRF token
-        r1 = session.get(login_url)
-        if r1.status_code != 200:
-            raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
-
-        match = re.search(
-            r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text
-        )
-        if not match:
-            raise RuntimeError("CSRF token not found in login page")
-        csrf = match.group(1)
+        csrf = _extract_csrf(session.get(login_url))
 
         # Step 2: submit credentials
         r2 = session.post(
@@ -100,6 +152,19 @@ def fetch_token(username: str, password: str) -> str:
             if token:
                 _LOGGER.debug("Successfully obtained Rain Bird access token")
                 return token
+
+        # No token. Work out why before reporting it, so the user is not
+        # sent chasing their password when the WAF is what blocked them.
+        if _looks_like_waf(r2):
+            raise RainBirdWafChallenge(_WAF_MESSAGE.format(status=r2.status_code))
+
+        if "/Account/Login" in url:
+            raise RainBirdAuthRejected(
+                "Login rejected (the server returned the login page instead of "
+                "redirecting with a token). Check the username and password, and "
+                "try logging in at https://iq4.rainbird.com — the account may need "
+                "a password change or new terms accepted."
+            )
 
         raise RuntimeError(
             f"access_token not found in redirect. "
@@ -146,16 +211,7 @@ def fetch_token_isapp(username: str, password: str) -> str:
 
     with cf.Session(impersonate="chrome") as session:
         # Step 1: load login page and extract CSRF token
-        r1 = session.get(login_url)
-        if r1.status_code != 200:
-            raise RuntimeError(f"Login page failed: HTTP {r1.status_code}")
-
-        match = re.search(
-            r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', r1.text
-        )
-        if not match:
-            raise RuntimeError("CSRF token not found in login page")
-        csrf = match.group(1)
+        csrf = _extract_csrf(session.get(login_url))
 
         # Step 2: submit credentials without auto-following redirects; we
         # need to intercept the authorization code, which lands on a
@@ -172,13 +228,18 @@ def fetch_token_isapp(username: str, password: str) -> str:
             allow_redirects=False,
         )
 
-        if resp.status_code == 200 and not (
-            resp.headers.get("location") or resp.headers.get("Location")
-        ):
-            raise RuntimeError(
-                "Login rejected (server returned the login page instead of "
-                "redirecting) — check the username/password."
-            )
+        if not (resp.headers.get("location") or resp.headers.get("Location")):
+            if _looks_like_waf(resp):
+                raise RainBirdWafChallenge(
+                    _WAF_MESSAGE.format(status=resp.status_code)
+                )
+            if resp.status_code == 200:
+                raise RainBirdAuthRejected(
+                    "Login rejected (the server returned the login page instead "
+                    "of redirecting). Check the username and password, and try "
+                    "logging in at https://iq4.rainbird.com — the account may "
+                    "need a password change or new terms accepted."
+                )
 
         # Step 3: walk the redirect chain until the authorization code appears
         code = None
