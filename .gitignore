@@ -3,3 +3,6 @@ rainbird_iq4_token.json
 __pycache__/
 **/__pycache__/
 *.pyc
+
+# Diagnostic dumps (may contain account identifiers)
+*diagnostic_*.json
