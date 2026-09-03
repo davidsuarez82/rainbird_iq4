@@ -366,6 +366,24 @@ def main():
     satellite_id = args.satellite or satellites[0].get("id")
     print(f"  using satelliteId {satellite_id}")
 
+    # Printed rather than left buried in the JSON: const.py's CONTROLLER_MODELS
+    # only maps a couple of type ids so far (ESP-ME3 and ESP-TM2), so every new
+    # reporter's number is worth having, and asking people to dig it out of a
+    # 300-line dump costs a round trip. Note "name" is user-editable, so the
+    # type number is the reliable part.
+    chosen = next((s for s in satellites if s.get("id") == satellite_id), None)
+    if chosen:
+        print(f"  controller: name={chosen.get('name')!r} "
+              f"type={chosen.get('type')} "
+              f"firmware={chosen.get('version')!r} "
+              f"stations={chosen.get('stationCount')}")
+        report["controller"] = {
+            "name": chosen.get("name"),
+            "type": chosen.get("type"),
+            "firmware": chosen.get("version"),
+            "stationCount": chosen.get("stationCount"),
+        }
+
     print("\nStep 3: fetching satellite detail...")
     s_status, satellite = api.get("Satellite/GetSatellite", {"satelliteId": satellite_id})
     report["GetSatellite"] = {"status": s_status, "body": redact(satellite, do_redact)}
