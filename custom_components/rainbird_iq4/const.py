@@ -21,6 +21,21 @@ DEFAULT_NAME = "Rain Bird IQ4"
 AUTH_BASE = "https://iq4server.rainbird.com/coreidentityserver"
 API_BASE = "https://iq4server.rainbird.com/coreapi/api"
 
+# AWS AppSync GraphQL endpoint. Controllers that report isMQTT publish live
+# state here rather than through the REST API, including the state of their
+# local sensor (SEN) terminals, which the REST sensor list does not report.
+# Authorised with the same bearer token as the REST API.
+#
+# The region is baked into the hostname but is NOT a per-account shard: an
+# EU account with an EU controller is served by this same us-west-2 endpoint
+# (verified against a Netherlands ESP-TM2).
+#
+# Endpoint discovered by KRH1009. Undocumented and without a public contract,
+# so every caller must degrade gracefully if it changes.
+APPSYNC_URL = (
+    "https://m3iuhu3l3zbjpkctbnh2of4chm.appsync-api.us-west-2.amazonaws.com/graphql"
+)
+
 # --- Web portal channel (isIQ) — the original/default login method ---
 # Implicit flow, same as the iq4.rainbird.com web portal. Token carries
 # isApp: false / isIQ: true. On US free-tier accounts this channel is
@@ -58,6 +73,12 @@ STATUS_PAUSED = "P"
 CONTROLLER_MODELS: dict[int, str] = {
     57: "ESP-ME3",
     69: "ESP-TM2",
+    # Reported by KRH1009; the IQ4 portal shows it as "ESP-TM2 8 Stations".
+    71: "ESP-TM2",
+    # Reported by jflachaine-ops. The ARC family is ARC4/ARC6/ARC8 by station
+    # count; unknown whether 77 covers all three or just one, so the family
+    # name is used until a second report narrows it down.
+    77: "ARC",
 }
 
 

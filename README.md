@@ -22,6 +22,7 @@ A Home Assistant custom integration for **Rain Bird IQ4** cloud-connected irriga
 - **Real-time station monitoring** — zone status (idle / running / paused), last run time, last completed run, active/inactive flag
 - **Program monitoring** — schedule status for Weekly, Odd, Even and Cyclic programs, with next run date for all types
 - **Rain delay sensor** — days remaining
+- **Local sensor state** — state of the controller's SEN terminals
 - **Forecast rain delay** — enabled/disabled with threshold attributes
 - **Controller status** — connected to cloud, operating mode, alarms and warnings
 - **Multi-controller support** — accounts with multiple controllers can add each one as a separate integration entry
@@ -215,6 +216,7 @@ This integration does the same: once a `start_zone` call is accepted by the back
 - **Cloud-dependent** — The integration requires an active internet connection and Rain Bird IQ4 cloud service. Local control is not supported.
 - **Token-based auth** — Authentication tokens are cached on disk and refreshed automatically every ~2 hours. A restart may briefly show entities as unavailable while the token is refreshed. Since v1.0.7 the cache lives in `/config/.storage/rainbird_iq4_token_<account-hash>.json` (one file per account, survives HACS updates). The old file at `custom_components/rainbird_iq4/rainbird_iq4_token.json` is unused and can be deleted.
 - **Timestamps in local time** — Rain Bird event log timestamps are in controller local time, not UTC.
+- **Local sensor entity reflects the terminals, not a sensor model** — the "Local Sensor" binary sensor reports the electrical state of the controller's SEN terminals: open (Wet) or closed (Dry). Controllers shipped without a sensor carry a factory jumper across those terminals and will therefore read Dry permanently, which is correct — the controller sees no rain because nothing can signal it. The terminals also accept sensors other than rain sensors (freeze sensors, for example), which is why the entity is not named after rain. The sensor model reported by IQ4 has been observed to disagree with the hardware actually connected, so it is exposed as an attribute only and never drives the state. The entity only appears on controllers reporting `isMQTT`, since the REST API does not carry this state.
 
 ---
 

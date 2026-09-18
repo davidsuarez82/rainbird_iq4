@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import json as json_lib
 import logging
 import threading
 import time
@@ -10,7 +11,7 @@ from typing import Any
 from curl_cffi import requests as cf_requests
 
 from .auth import RainBirdAuth
-from .const import API_BASE
+from .const import API_BASE, APPSYNC_URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +34,10 @@ class RainBirdAPI:
     # cut needless cloud calls.
     _STATION_LIST_CACHE_TTL = 3600  # seconds
 
+    # deviceUUID and isMQTT come from GetSatelliteList and are properties of
+    # the hardware, so they only change if the controller is replaced.
+    _DEVICE_INFO_CACHE_TTL = 3600  # seconds
+
     def __init__(self, auth: RainBirdAuth) -> None:
         self._auth = auth
         self._local = threading.local()
@@ -40,6 +45,8 @@ class RainBirdAPI:
         self._sessions_lock = threading.Lock()
         self._station_list_cache: dict[int, tuple[float, list]] = {}
         self._station_list_cache_lock = threading.Lock()
+        self._device_info_cache: dict[int, tuple[float, dict]] = {}
+        self._device_info_cache_lock = threading.Lock()
 
     def _session(self) -> cf_requests.Session:
         """Return the persistent session for the current thread."""
@@ -187,6 +194,131 @@ class RainBirdAPI:
     def get_run_station_status(self, satellite_id: int) -> list:
         """Get real-time run status for all stations."""
         return self._get("ProgramStep/GetRunStationStatusForSatellite", {"satelliteId": satellite_id}) or []
+
+    # ── AppSync: state the REST API does not expose ──────────────────────────
+
+    _DEVICE_STATE_QUERY = (
+        "query getDeviceStateTable($PK: String, $SK: String) {"
+        "  getDeviceStateTable(PK: $PK, SK: $SK) { SK Data TimeStamp }"
+        "}"
+    )
+
+    # Key of the local sensor (SEN terminals) record in the device state table.
+    SK_RAIN_SENSOR_STATE = "Event#RainSensorState"
+
+    def _graphql(self, query: str, variables: dict | None = None) -> dict | None:
+        """POST a GraphQL document to AppSync.
+
+        Returns the `data` object, or None if the call failed for any reason.
+        Callers must treat None as "no information" rather than as a negative
+        answer.
+        """
+        session = self._session()
+        payload = {"query": query, "variables": variables or {}}
+
+        headers = dict(self._auth.get_headers())
+        headers["Content-Type"] = "application/json"
+
+        try:
+            r = session.post(APPSYNC_URL, json=payload, headers=headers, timeout=30)
+            if r.status_code == 401:
+                self._auth.invalidate()
+                headers = dict(self._auth.get_headers())
+                headers["Content-Type"] = "application/json"
+                r = session.post(APPSYNC_URL, json=payload, headers=headers, timeout=30)
+
+            if r.status_code != 200:
+                _LOGGER.debug("AppSync returned HTTP %s: %s",
+                              r.status_code, (r.text or "")[:200])
+                return None
+
+            body = r.json()
+        except Exception as err:
+            _LOGGER.debug("AppSync request failed: %s", err)
+            return None
+
+        if body.get("errors"):
+            _LOGGER.debug("AppSync GraphQL errors: %s", body["errors"])
+            return None
+        return body.get("data")
+
+    @staticmethod
+    def _parse_state_payload(raw) -> dict | None:
+        """AppSync wraps state payloads as a JSON string inside `Data`."""
+        if raw is None:
+            return None
+        if isinstance(raw, dict):
+            return raw
+        try:
+            return json_lib.loads(raw)
+        except (ValueError, TypeError):
+            _LOGGER.debug("Could not parse AppSync state payload: %s", raw)
+            return None
+
+    def get_device_info(self, satellite_id: int) -> dict:
+        """Return {"deviceUUID": str|None, "isMQTT": bool} for a satellite.
+
+        Cached — these are hardware properties, not state.
+        """
+        now = time.monotonic()
+        with self._device_info_cache_lock:
+            cached = self._device_info_cache.get(satellite_id)
+            if cached and now - cached[0] < self._DEVICE_INFO_CACHE_TTL:
+                return cached[1]
+
+        info = {"deviceUUID": None, "isMQTT": False}
+        try:
+            match = next(
+                (s for s in self.get_satellite_list() if s.get("id") == satellite_id),
+                None,
+            )
+            if match:
+                info = {
+                    "deviceUUID": match.get("deviceUUID"),
+                    "isMQTT": bool(match.get("isMQTT")),
+                }
+        except Exception as err:
+            _LOGGER.debug("Could not resolve device info for %s: %s", satellite_id, err)
+            return info
+
+        with self._device_info_cache_lock:
+            self._device_info_cache[satellite_id] = (now, info)
+        return info
+
+    def get_local_sensor_state(self, satellite_id: int) -> dict | None:
+        """State of the controller's local sensor (SEN) terminals.
+
+        Returns {"state": int, "timestamp": int|None}, where state 1 means the
+        circuit is open (what a rain sensor does when it trips) and 0 means
+        closed. Controllers shipped without a sensor have a factory jumper
+        across those terminals, which reads as 0 — electrically identical to a
+        sensor reporting dry, and correct either way.
+
+        None means we could not ask. The REST sensor list does NOT carry this:
+        its `onOffState` was observed to stay at 0 with the terminals both
+        bridged and open, so AppSync is the only source.
+        """
+        info = self.get_device_info(satellite_id)
+        device_uuid = info.get("deviceUUID")
+        if not device_uuid or not info.get("isMQTT"):
+            return None
+
+        data = self._graphql(
+            self._DEVICE_STATE_QUERY,
+            {"PK": device_uuid, "SK": self.SK_RAIN_SENSOR_STATE},
+        )
+        if data is None:
+            return None
+
+        record = data.get("getDeviceStateTable")
+        if not record:
+            return None
+
+        parsed = self._parse_state_payload(record.get("Data"))
+        if parsed is None or parsed.get("state") is None:
+            return None
+
+        return {"state": parsed["state"], "timestamp": record.get("TimeStamp")}
 
     def get_programs_assigned_runtime(self, satellite_id: int) -> list:
         """Get assigned run times per station per program."""

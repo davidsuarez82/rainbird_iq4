@@ -38,6 +38,18 @@ async def async_setup_entry(
         if sensor.get("type", -1) != -1:
             entities.append(RainBirdRainSensor(config_coordinator, sensor))
 
+    # Controllers reachable through AppSync report the state of their local
+    # sensor (SEN) terminals. The REST sensor list does not, so this is the
+    # only entity that tracks them. Created whenever the controller answered,
+    # regardless of whether a sensor is declared in IQ4: one with the factory
+    # jumper simply reads dry, which is electrically correct.
+    if (coordinators["realtime"].data or {}).get("localSensor") is not None:
+        entities.append(
+            RainBirdLocalSensorBinarySensor(
+                coordinators["realtime"], config_coordinator
+            )
+        )
+
     async_add_entities(entities)
 
 
@@ -190,8 +202,104 @@ class RainBirdForecastBinarySensor(CoordinatorEntity, BinarySensorEntity):
         }
 
 
+class RainBirdLocalSensorBinarySensor(BinarySensorEntity):
+    """State of the controller's local sensor (SEN) terminals — real-time.
+
+    Reports the electrical state of the sensor terminals, not a particular
+    sensor model. `state: 1` means the circuit is open, which is what a rain
+    sensor does when it trips and what makes the controller suspend
+    irrigation; `state: 0` means closed. Controllers shipped without a sensor
+    carry a factory jumper across those terminals and therefore read dry.
+
+    The terminals accept more than rain sensors (controllers advertise
+    several localSensorTypes, freeze sensors among them), so the entity is
+    named after the terminals rather than after rain.
+
+    Source is AppSync: GetSensorListBySatelliteId's `onOffState` was observed
+    to stay at 0 with the terminals both bridged and open, so the REST API
+    cannot back this.
+    """
+
+    def __init__(
+        self,
+        coordinator: RainBirdCoordinator,
+        config_coordinator: RainBirdConfigCoordinator,
+    ) -> None:
+        self._coordinator = coordinator
+        self._config_coordinator = config_coordinator
+        satellite = (config_coordinator.data or {}).get("satellite", {})
+        self._satellite_id = coordinator.satellite_id
+        self._satellite_name = satellite.get("name", "Rain Bird IQ4")
+        self._attr_unique_id = f"{self._satellite_id}_local_sensor"
+        self._attr_name = f"{self._satellite_name} Local Sensor"
+        self._attr_device_class = BinarySensorDeviceClass.MOISTURE
+        self._attr_icon = "mdi:water-alert"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        satellite = (self._config_coordinator.data or {}).get("satellite", {})
+        return DeviceInfo(
+            identifiers={(DOMAIN, str(self._satellite_id))},
+            name=self._satellite_name,
+            manufacturer="Rain Bird",
+            model=satellite.get("model", "Rain Bird IQ4"),
+            sw_version=satellite.get("version"),
+        )
+
+    def _state_record(self) -> dict | None:
+        if not self._coordinator.data:
+            return None
+        return self._coordinator.data.get("localSensor")
+
+    @property
+    def is_on(self) -> bool:
+        record = self._state_record()
+        return bool(record and record.get("state") == 1)
+
+    @property
+    def available(self) -> bool:
+        # Without a reading, report unavailable rather than claiming dry.
+        return (
+            self._coordinator.last_update_success
+            and self._state_record() is not None
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        record = self._state_record() or {}
+        attrs: dict = {"raw_state": record.get("state")}
+        if record.get("timestamp") is not None:
+            attrs["last_reported"] = record["timestamp"]
+
+        # What IQ4 believes is wired to the terminals, for context only. Both
+        # fields have been observed to disagree with the hardware actually
+        # connected, so they never drive the state.
+        sensors = (self._config_coordinator.data or {}).get("sensors", [])
+        if sensors:
+            attrs["configured_model"] = sensors[0].get("model")
+            attrs["configured_type"] = sensors[0].get("typeName")
+        return attrs
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            self._coordinator.async_add_listener(self.async_write_ha_state)
+        )
+        self.async_on_remove(
+            self._config_coordinator.async_add_listener(self.async_write_ha_state)
+        )
+
+
 class RainBirdRainSensor(CoordinatorEntity, BinarySensorEntity):
-    """Binary sensor reporting whether the rain sensor is triggered — config polling."""
+    """Binary sensor for a sensor declared in IQ4 — config polling.
+
+    NOTE: only instantiated for sensors reporting `type != -1`, and no such
+    controller has been observed. The `triggered` and `active` fields read
+    below do not appear in any captured payload of
+    GetSensorListBySatelliteId, so this entity would sit permanently off if
+    it were ever created. Left as-is rather than guessed at: fixing it needs
+    a dump from a controller that actually declares a sensor. For the SEN
+    terminals themselves, see RainBirdLocalSensorBinarySensor above.
+    """
 
     def __init__(self, coordinator: RainBirdConfigCoordinator, sensor: dict) -> None:
         super().__init__(coordinator)

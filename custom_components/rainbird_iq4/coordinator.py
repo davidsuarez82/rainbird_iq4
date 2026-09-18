@@ -272,6 +272,11 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         stations   = self.api.get_station_list(sid)
         run_status = self.api.get_run_station_status(sid)
 
+        # State of the SEN terminals. Only AppSync reports this — the REST
+        # sensor list's onOffState does not change when the terminals do.
+        # None when the controller is not MQTT-based or the call failed.
+        local_sensor = self.api.get_local_sensor_state(sid)
+
         # Map stationId → live status
         station_live: dict[int, dict] = {}
         for prog in run_status:
@@ -366,6 +371,7 @@ class RainBirdCoordinator(DataUpdateCoordinator):
             },
             "stations":  stations_data,
             "eventLogs": event_logs,
+            "localSensor": local_sensor,
         }
 
 
