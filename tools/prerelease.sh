@@ -55,7 +55,16 @@ if [ -n "$RECENT_TAGS" ]; then
     READDED=$(git diff "$TAG" -- "$COMP" \
       | grep -E '^\+\s*(async def|def|class) ' \
       | sed -E 's/^\+\s*//' || true)
-    GONE=$(comm -23 <(echo "$REMOVED" | sort -u) <(echo "$READDED" | sort -u) | sed '/^$/d')
+    # LC_ALL=C on all three: under a UTF-8 locale sort ignores spaces and
+    # punctuation in its primary comparison while comm compares byte by byte,
+    # so the two disagree on what "sorted" means. comm then warns and can
+    # abandon the comparison midway, which here would mean reporting no lost
+    # definitions when some were in fact removed — the check failing open.
+    # Blank lines are dropped before the compare rather than after, since an
+    # empty REMOVED or READDED otherwise feeds one in.
+    GONE=$(LC_ALL=C comm -23 \
+      <(echo "$REMOVED" | sed '/^$/d' | LC_ALL=C sort -u) \
+      <(echo "$READDED" | sed '/^$/d' | LC_ALL=C sort -u))
     if [ -n "$GONE" ]; then
       ALL_GONE=$(printf '%s\n%s' "$ALL_GONE" \
         "$(echo "$GONE" | sed "s|\$|\t$TAG|")")
