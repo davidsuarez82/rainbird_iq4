@@ -47,6 +47,9 @@ class RainBirdAPI:
         self._station_list_cache_lock = threading.Lock()
         self._device_info_cache: dict[int, tuple[float, dict]] = {}
         self._device_info_cache_lock = threading.Lock()
+        # Whether the current run of AppSync failures has already been
+        # reported at WARNING level. Reset once a call succeeds.
+        self._appsync_warned = False
 
     def _session(self) -> cf_requests.Session:
         """Return the persistent session for the current thread."""
@@ -212,35 +215,66 @@ class RainBirdAPI:
         Returns the `data` object, or None if the call failed for any reason.
         Callers must treat None as "no information" rather than as a negative
         answer.
+
+        The token is sent without a "Bearer" prefix. Both forms were accepted
+        on the accounts tested here, over the web and app channels alike, but
+        one user reported the prefixed form being rejected; the bare token has
+        worked everywhere it has been tried.
+
+        A rejection here deliberately does NOT invalidate the shared token.
+        AppSync refusing a call says nothing about whether the token is still
+        good for the REST API, and invalidating it would force a full login on
+        the next request — every 30 seconds from the realtime coordinator,
+        which is exactly the kind of traffic that trips the AWS WAF challenge.
+        Expiry is already handled by get_token(), and the REST client still
+        invalidates on its own 401s.
         """
         session = self._session()
         payload = {"query": query, "variables": variables or {}}
-
-        headers = dict(self._auth.get_headers())
-        headers["Content-Type"] = "application/json"
+        headers = {
+            "Authorization": self._auth.get_token(),
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
 
         try:
             r = session.post(APPSYNC_URL, json=payload, headers=headers, timeout=30)
-            if r.status_code == 401:
-                self._auth.invalidate()
-                headers = dict(self._auth.get_headers())
-                headers["Content-Type"] = "application/json"
-                r = session.post(APPSYNC_URL, json=payload, headers=headers, timeout=30)
-
             if r.status_code != 200:
-                _LOGGER.debug("AppSync returned HTTP %s: %s",
-                              r.status_code, (r.text or "")[:200])
+                self._appsync_failed(
+                    "AppSync returned HTTP %s: %s",
+                    r.status_code, (r.text or "")[:200],
+                )
                 return None
-
             body = r.json()
         except Exception as err:
-            _LOGGER.debug("AppSync request failed: %s", err)
+            self._appsync_failed("AppSync request failed: %s", err)
             return None
 
         if body.get("errors"):
-            _LOGGER.debug("AppSync GraphQL errors: %s", body["errors"])
+            self._appsync_failed("AppSync GraphQL errors: %s", body["errors"])
             return None
+
+        if self._appsync_warned:
+            _LOGGER.info("AppSync reachable again")
+            self._appsync_warned = False
         return body.get("data")
+
+    def _appsync_failed(self, message: str, *args) -> None:
+        """Log an AppSync failure: WARNING the first time, DEBUG after that.
+
+        Failures used to be DEBUG-only, which left a user whose local sensor
+        entity never appeared with nothing in the log to explain why. Warning
+        on every poll would flood the log instead, so only the first failure
+        of a run is raised, and recovery is announced once it clears.
+        """
+        if self._appsync_warned:
+            _LOGGER.debug(message, *args)
+            return
+        _LOGGER.warning(
+            message + " (further AppSync failures are logged at debug level)",
+            *args,
+        )
+        self._appsync_warned = True
 
     @staticmethod
     def _parse_state_payload(raw) -> dict | None:

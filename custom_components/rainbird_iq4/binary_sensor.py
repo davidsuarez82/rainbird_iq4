@@ -38,12 +38,22 @@ async def async_setup_entry(
         if sensor.get("type", -1) != -1:
             entities.append(RainBirdRainSensor(config_coordinator, sensor))
 
-    # Controllers reachable through AppSync report the state of their local
-    # sensor (SEN) terminals. The REST sensor list does not, so this is the
-    # only entity that tracks them. Created whenever the controller answered,
-    # regardless of whether a sensor is declared in IQ4: one with the factory
-    # jumper simply reads dry, which is electrically correct.
-    if (coordinators["realtime"].data or {}).get("localSensor") is not None:
+    # Controllers reporting isMQTT expose the state of their local sensor
+    # (SEN) terminals through AppSync; the REST sensor list does not, so this
+    # is the only entity that tracks them. Created regardless of whether a
+    # sensor is declared in IQ4: one with the factory jumper simply reads dry,
+    # which is electrically correct.
+    #
+    # Decided from isMQTT, a hardware property from the REST API, rather than
+    # from whether the first AppSync poll happened to succeed. Keying it on
+    # that poll meant a single transient failure while Home Assistant started
+    # hid the entity until the next restart, with nothing in the log to say
+    # why. A failed poll now shows as unavailable instead.
+    device_info = await hass.async_add_executor_job(
+        coordinators["api"].get_device_info,
+        coordinators["realtime"].satellite_id,
+    )
+    if device_info.get("isMQTT") and device_info.get("deviceUUID"):
         entities.append(
             RainBirdLocalSensorBinarySensor(
                 coordinators["realtime"], config_coordinator
