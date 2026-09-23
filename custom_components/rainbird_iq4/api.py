@@ -38,6 +38,11 @@ class RainBirdAPI:
     # the hardware, so they only change if the controller is replaced.
     _DEVICE_INFO_CACHE_TTL = 3600  # seconds
 
+    # Control commands whose replies are logged at debug level (see
+    # _request). Satellite/StopAllIrrigation lives outside ManualOps/ but is
+    # just as fire-and-forget.
+    _COMMAND_PATHS = ("ManualOps/", "Satellite/StopAllIrrigation")
+
     def __init__(self, auth: RainBirdAuth) -> None:
         self._auth = auth
         self._local = threading.local()
@@ -114,9 +119,9 @@ class RainBirdAPI:
         # reports zone starts that silently do nothing and only take effect on
         # a second attempt, with nothing in the log. Record what the backend
         # actually replied so the next report carries the evidence.
-        if path.startswith("ManualOps/"):
+        if path.startswith(self._COMMAND_PATHS):
             _LOGGER.debug(
-                "ManualOps reply: %s %s -> HTTP %s, body: %s",
+                "Command reply: %s %s -> HTTP %s, body: %s",
                 method, path, r.status_code, (r.text or "")[:300] or "<empty>",
             )
 
@@ -389,15 +394,37 @@ class RainBirdAPI:
         )
 
     def stop_all_stations(self, satellite_id: int, station_ids: list[int] | None = None) -> None:
-        """Stop running stations on a satellite in a single batch call.
+        """Stop all irrigation on a satellite, including queued program stations.
 
+        Uses Satellite/StopAllIrrigation, the call behind the IQ4 web
+        "Cancel all" button (captured 2026-09-22): the body is a list of
+        satellite ids and a successful reply is HTTP 200 with an empty body.
+        ManualOps/AdvanceStations, used until 1.4.1, only skips the running
+        station: inside a program the controller moves on to the next queued
+        station instead of stopping.
+
+        If the backend rejects StopAllIrrigation with an HTTP error (some
+        controllers refuse Satellite/* calls, e.g. ESP-ME3 on GetSatellite),
+        fall back to advancing the stations, the pre-1.4.2 behaviour.
         station_ids lets the caller target only the zones it already knows
         to be running (typically read straight from the realtime
-        coordinator's cached data, at zero extra API cost). If None, falls
-        back to targeting every station on the controller — the safe
-        default for when no live status is available yet (e.g. right after
-        startup before the first realtime refresh completes).
+        coordinator's cached data, at zero extra API cost). If None, the
+        fallback targets every station on the controller — the safe default
+        for when no live status is available yet (e.g. right after startup
+        before the first realtime refresh completes).
         """
+        try:
+            self._post("Satellite/StopAllIrrigation", json=[satellite_id])
+            return
+        except cf_requests.RequestsError as e:
+            if e.response is None:
+                raise
+            _LOGGER.warning(
+                "Satellite/StopAllIrrigation rejected for satellite %s "
+                "(HTTP %s); falling back to advancing the running stations, "
+                "which does not stop stations queued by a program",
+                satellite_id, e.response.status_code,
+            )
         if station_ids is None:
             stations = self.get_station_list(satellite_id)
             station_ids = [s["id"] for s in stations]

@@ -57,7 +57,7 @@ stop_zone:
 
 stop_all_zones:
   name: Stop All Zones
-  description: Stop all running zones on a controller in a single request.
+  description: Stop all irrigation on a controller in a single request, including stations queued by a running program.
   fields:
     controller_entity:
       name: Controller

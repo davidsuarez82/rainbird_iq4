@@ -966,9 +966,9 @@ class RainBirdIQ4Card extends HTMLElement {
     });
 
     this.shadowRoot.querySelector("[data-stop-all]")?.addEventListener("click", () => {
-      this._visibleStations()
-        .filter((station) => this._stationNeedsStop(station))
-        .forEach((station) => this._stopStation(station));
+      this._stopAllStations(
+        this._visibleStations().filter((station) => this._stationNeedsStop(station))
+      );
     });
 
     this.shadowRoot.querySelectorAll("[data-station-duration]").forEach((input) => {
@@ -1102,6 +1102,41 @@ class RainBirdIQ4Card extends HTMLElement {
         delayMs: this._stopRefreshDelayMs(),
       }),
       error: (error) => this._setStationError(station, error),
+    });
+  }
+
+  _stopAllStations(stations) {
+    // Sensor-mode stations belong to this integration, whose stop_all_zones
+    // service stops the whole controller in one call, including stations
+    // queued by a running program. Stopping station by station (stop_zone)
+    // only skips the running one, so inside a program the next station
+    // would start. Legacy setups keep stopping station by station.
+    const byController = new Map();
+    stations.forEach((station) => {
+      if (station.mode !== "sensor") {
+        this._stopStation(station);
+        return;
+      }
+      if (!byController.has(station.controllerId)) byController.set(station.controllerId, []);
+      byController.get(station.controllerId).push(station);
+    });
+    byController.forEach((group, controllerId) => {
+      const now = Date.now();
+      group.forEach((station) => this._setStationAction(station, {
+        type: "stopping",
+        requestedAt: now,
+        settleUntil: now + 6000,
+        expiresAt: now + 45000,
+      }));
+      this._render(true);
+      this._callService("rainbird_iq4", "stop_all_zones", {
+        controller_entity: group[0].entityId,
+      }, {
+        success: () => this._queueRefreshControllerById(controllerId, {
+          delayMs: this._stopRefreshDelayMs(),
+        }),
+        error: (error) => group.forEach((station) => this._setStationError(station, error)),
+      });
     });
   }
 

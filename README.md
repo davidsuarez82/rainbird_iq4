@@ -52,7 +52,11 @@ To use the bundled Lovelace card, add this dashboard resource after restarting:
 /rainbird_iq4/rainbird_iq4_card.js
 ```
 
-Resource type: **JavaScript module**.
+Resource type: **JavaScript module**. Add it without a version: from v1.4.2 the
+integration appends `?v=<version>` to that resource on every start, so browsers
+and the Companion app pick up card updates on their own. In Lovelace YAML mode
+the resource is read-only for the integration, so bump the version by hand (or
+reload the browser cache) after updating.
 
 ### Manual
 
@@ -66,7 +70,11 @@ For the bundled Lovelace card, add this dashboard resource:
 /rainbird_iq4/rainbird_iq4_card.js
 ```
 
-Resource type: **JavaScript module**.
+Resource type: **JavaScript module**. Add it without a version: from v1.4.2 the
+integration appends `?v=<version>` to that resource on every start, so browsers
+and the Companion app pick up card updates on their own. In Lovelace YAML mode
+the resource is read-only for the integration, so bump the version by hand (or
+reload the browser cache) after updating.
 
 ---
 

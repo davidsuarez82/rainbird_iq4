@@ -8,10 +8,12 @@ import voluptuous as vol
 
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.start import async_at_started
+from homeassistant.loader import async_get_integration
 
 from .api import RainBirdAPI
 from .auth import RainBirdAuth
@@ -38,6 +40,7 @@ PLATFORMS = ["sensor", "binary_sensor", "calendar", "button"]
 FRONTEND_URL = f"/{DOMAIN}/rainbird_iq4_card.js"
 FRONTEND_PATH = Path(__file__).parent / "frontend" / "rainbird_iq4_card.js"
 _FRONTEND_REGISTERED = False
+_CARD_RESOURCE_VERSIONED = False
 
 SERVICES = [
     "start_zone",
@@ -61,6 +64,70 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         [StaticPathConfig(FRONTEND_URL, str(FRONTEND_PATH), cache_headers=False)]
     )
     _FRONTEND_REGISTERED = True
+
+
+async def _async_version_card_resource(hass: HomeAssistant) -> None:
+    """Keep the card's Lovelace resource URL on ?v=<integration version>.
+
+    The card is served from a fixed path, so after an update browsers and the
+    Companion app happily keep running the module they already cached. Putting
+    the version in the registered resource URL changes that URL on every
+    release, which is what forces the refetch — the same trick HACS uses with
+    its ?hacstag= parameter.
+
+    Best effort on purpose: Lovelace's resource storage is an internal API and
+    YAML mode has no writable collection, so every failure path simply leaves
+    the URL untouched, exactly as it behaved before 1.4.2.
+    """
+    global _CARD_RESOURCE_VERSIONED
+    if _CARD_RESOURCE_VERSIONED:
+        return
+    try:
+        version = (await async_get_integration(hass, DOMAIN)).version
+        if version is None:
+            return
+        target = f"{FRONTEND_URL}?v={version}"
+
+        # Read hass.data instead of importing lovelace internals: that import
+        # path has moved between HA releases and an ImportError at module
+        # level would take the whole integration down.
+        lovelace = hass.data.get("lovelace")
+        collection = getattr(lovelace, "resources", None)
+        if collection is None and isinstance(lovelace, dict):
+            collection = lovelace.get("resources")
+        if collection is None or not hasattr(collection, "async_update_item"):
+            _LOGGER.debug(
+                "Lovelace resources are not writable (YAML mode?); card URL left as %s",
+                FRONTEND_URL,
+            )
+            return
+
+        await collection.async_get_info()  # loads the collection if needed
+        for item in collection.async_items() or []:
+            url = item.get("url", "")
+            if url.split("?", 1)[0] != FRONTEND_URL or url == target:
+                continue
+            await collection.async_update_item(item["id"], {"url": target})
+            _LOGGER.info("Card resource URL updated to %s", target)
+        _CARD_RESOURCE_VERSIONED = True
+    except Exception:  # noqa: BLE001 - a cosmetic URL must never block setup
+        _LOGGER.debug("Could not version the card resource URL", exc_info=True)
+
+
+@callback
+def _async_schedule_card_resource_version(hass: HomeAssistant) -> None:
+    """Version the card resource once HA is up.
+
+    Lovelace may not have built its data yet while config entries are being
+    set up, so the update waits for the started event unless HA is already
+    running, which is the case when the entry is reloaded. async_at_started
+    covers both cases and, because the callback is a coroutine function, runs
+    it on the event loop instead of in a worker thread.
+    """
+    async def _version_resource(_hass: HomeAssistant) -> None:
+        await _async_version_card_resource(hass)
+
+    async_at_started(hass, _version_resource)
 
 
 # ── Entity resolution via unique_id (stable, no name matching) ────────────────
@@ -191,9 +258,12 @@ async def _handle_stop_all_zones(call: ServiceCall) -> None:
     coordinators = _resolve_controller(hass, call.data.get("controller_entity"))
     api = coordinators["api"]
     realtime = coordinators["realtime"]
+    # StopAllIrrigation needs no station ids and stops queued program
+    # stations too, so it is sent even when nothing looks running. The ids
+    # only feed the AdvanceStations fallback and the manual-stop marks below.
     # Reuse the realtime coordinator's already-cached data instead of an
     # extra live status call — zero additional API cost in the common case.
-    # None (no data yet) falls back to targeting every station.
+    # None (no data yet) makes the fallback target every station.
     running_ids = None
     if realtime.data:
         running_ids = [
@@ -318,6 +388,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await _async_register_frontend(hass)
+    _async_schedule_card_resource_version(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(async_update_options))
 
