@@ -1040,18 +1040,18 @@ class RainBirdIQ4Card extends HTMLElement {
         station_entity: station.entityId,
         duration,
       }, {
-        success: () => {
-          this._setStationAction(station, {
-            type: "running",
-            duration,
-            requestedAt: Date.now(),
-            settleUntil: Date.now() + 20000,
-            expiresAt: Date.now() + duration * 60000 + 45000,
-          });
-          this._queueRefreshControllerById(station.controllerId, {
-            delayMs: this._startRefreshDelayMs(),
-          });
-        },
+        // No refresh is queued here: since 1.5.0 the integration schedules
+        // its own confirmation refresh, of the realtime coordinator alone,
+        // instead of the card pressing the refresh button for all three.
+        // requestedAt is carried over from the pending action: re-anchoring
+        // it here would restart the run's clock on a run already going.
+        success: () => this._setStationAction(station, {
+          type: "running",
+          duration,
+          requestedAt: this._stationAction(station)?.requestedAt || Date.now(),
+          settleUntil: Date.now() + 20000,
+          expiresAt: Date.now() + duration * 60000 + 45000,
+        }),
         error: (error) => this._setStationError(station, error),
       });
       return;
@@ -1060,18 +1060,13 @@ class RainBirdIQ4Card extends HTMLElement {
       station_id: Number(station.stationId),
       duration,
     }, {
-      success: () => {
-        this._setStationAction(station, {
-          type: "running",
-          duration,
-          requestedAt: Date.now(),
-          settleUntil: Date.now() + 20000,
-          expiresAt: Date.now() + duration * 60000 + 45000,
-        });
-        this._queueRefreshControllerById(station.controllerId, {
-          delayMs: this._startRefreshDelayMs(),
-        });
-      },
+      success: () => this._setStationAction(station, {
+        type: "running",
+        duration,
+        requestedAt: this._stationAction(station)?.requestedAt || Date.now(),
+        settleUntil: Date.now() + 20000,
+        expiresAt: Date.now() + duration * 60000 + 45000,
+      }),
       error: (error) => this._setStationError(station, error),
     });
   }
@@ -1088,9 +1083,6 @@ class RainBirdIQ4Card extends HTMLElement {
       this._callService("rainbird_iq4", "stop_zone", {
         station_entity: station.entityId,
       }, {
-        success: () => this._queueRefreshControllerById(station.controllerId, {
-          delayMs: this._stopRefreshDelayMs(),
-        }),
         error: (error) => this._setStationError(station, error),
       });
       return;
@@ -1098,9 +1090,6 @@ class RainBirdIQ4Card extends HTMLElement {
     this._callService("rainbird_iq4", "stop_station", {
       station_id: Number(station.stationId),
     }, {
-      success: () => this._queueRefreshControllerById(station.controllerId, {
-        delayMs: this._stopRefreshDelayMs(),
-      }),
       error: (error) => this._setStationError(station, error),
     });
   }
@@ -1132,9 +1121,6 @@ class RainBirdIQ4Card extends HTMLElement {
       this._callService("rainbird_iq4", "stop_all_zones", {
         controller_entity: group[0].entityId,
       }, {
-        success: () => this._queueRefreshControllerById(controllerId, {
-          delayMs: this._stopRefreshDelayMs(),
-        }),
         error: (error) => group.forEach((station) => this._setStationError(station, error)),
       });
     });
@@ -1209,25 +1195,8 @@ class RainBirdIQ4Card extends HTMLElement {
     });
   }
 
-  _queueRefreshControllerById(controllerId, options = {}) {
-    const controller = this._getControllers(this._getStations()).find(
-      (item) => item.id === controllerId
-    );
-    if (controller?.refreshEntity) {
-      this._queueRefreshController(controller, options);
-    }
-  }
-
   _refreshThrottleMs() {
     return Math.max(5, Number(this._config.refresh_throttle_seconds || 30)) * 1000;
-  }
-
-  _startRefreshDelayMs() {
-    return Math.max(0, Number(this._config.start_refresh_delay_seconds || 8)) * 1000;
-  }
-
-  _stopRefreshDelayMs() {
-    return Math.max(0, Number(this._config.stop_refresh_delay_seconds || 5)) * 1000;
   }
 
   _selectedController() {
@@ -1588,6 +1557,13 @@ class RainBirdIQ4Card extends HTMLElement {
         return;
       }
       if ((action.type === "starting" || action.type === "running") && this._isStationRunning(station)) {
+        // Hold on to the action while the controller has not published its
+        // end time yet: it carries the duration that was asked for, which is
+        // the only thing there is to show meanwhile, and the wait has been
+        // measured at up to 30 seconds. expiresAt still bounds it.
+        if ("run_ends_at" in station.attributes && !station.attributes.run_ends_at) {
+          return;
+        }
         delete this._stationActions[key];
         return;
       }
@@ -1638,21 +1614,48 @@ class RainBirdIQ4Card extends HTMLElement {
   }
 
   _stationRemaining(station, action) {
-    const liveRemaining = this._formatRemaining(
-      station.attributes.remaining ?? station.attributes.remaining_seconds
-    );
-    if (liveRemaining) return liveRemaining;
+    // run_ends_at is the controller's own end time, so it is both the most
+    // accurate source and the only one precise enough for seconds.
+    const countdown = this._formatCountdown(station.attributes.run_ends_at);
+    if (countdown) return countdown;
     if (
       (action?.type === "starting" || action?.type === "running") &&
       action.duration &&
       action.requestedAt
     ) {
-      const remainingMs = action.requestedAt + action.duration * 60000 - Date.now();
-      if (remainingMs > 0) {
-        return `${Math.max(1, Math.ceil(remainingMs / 60000))} min`;
+      if (!("run_ends_at" in station.attributes)) {
+        // Controllers that never report an end time keep the local estimate:
+        // it is all they will ever have.
+        const local = this._formatCountdown(action.requestedAt + action.duration * 60000);
+        if (local) return local;
+      } else {
+        // Waiting for the controller's own end time, which takes about ten
+        // seconds: show the duration that was asked for, as a plain label
+        // rather than a countdown, so it does not read as a stopped clock.
+        // The real time always comes in lower, since irrigation started after
+        // the command, so the display never jumps upwards.
+        return `${action.duration} min`;
       }
     }
-    return "";
+    return this._formatRemaining(
+      station.attributes.remaining ?? station.attributes.remaining_seconds
+    );
+  }
+
+  _formatCountdown(runEndsAt) {
+    if (!runEndsAt) return "";
+    const endsAt = new Date(runEndsAt).getTime();
+    if (Number.isNaN(endsAt)) return "";
+    const remainingMs = endsAt - Date.now();
+    if (remainingMs <= 0) return "";
+    const totalSeconds = Math.ceil(remainingMs / 1000);
+    return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`;
+  }
+
+  _hasRunningCountdown() {
+    return this._getStations().some((station) =>
+      Boolean(this._formatCountdown(station.attributes.run_ends_at))
+    );
   }
 
   _isRefreshing() {
@@ -1665,7 +1668,11 @@ class RainBirdIQ4Card extends HTMLElement {
   }
 
   _hasTemporaryState() {
-    return this._isRefreshing() || Boolean(Object.keys(this._stationActions || {}).length);
+    return (
+      this._isRefreshing() ||
+      Boolean(Object.keys(this._stationActions || {}).length) ||
+      this._hasRunningCountdown()
+    );
   }
 
   _syncTicker() {
@@ -1755,6 +1762,7 @@ class RainBirdIQ4Card extends HTMLElement {
         station.terminal,
         station.attributes.remaining,
         station.attributes.remaining_seconds,
+        station.attributes.run_ends_at,
         station.attributes.last_run,
         station.attributes.last_run_completed,
       ]),

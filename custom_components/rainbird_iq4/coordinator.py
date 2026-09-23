@@ -6,7 +6,8 @@ import time
 from datetime import date, datetime, timedelta
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import RainBirdAPI
@@ -33,6 +34,39 @@ MAX_CONSECUTIVE_ERRORS = 3
 # until it naturally expires, and event 98 can lag several minutes or
 # never appear at all. So we override both with our own command.
 MANUAL_STOP_MAX_AGE = timedelta(minutes=20)
+
+# ── AppSync station-state tuning (MQTT controllers only) ─────────────────────
+# All four numbers come from captures taken on 2026-09-08 and 2026-09-22; see
+# RainBirdAPI.get_station_states for the raw behaviour they are derived from.
+
+# When to take the first look after a command. The cloud accepts it long
+# before anything happens: on 2026-09-23 a start was accepted at 12:19:22 and
+# the controller only opened the valve at 12:19:30, writing its record at
+# 12:19:33. A stop takes about as long to show up. Neither delay is trusted to
+# be enough, which is why an unconfirmed command keeps booking another look
+# (APPSYNC_RETRY_PROBE_DELAY) until it is confirmed or gives up.
+APPSYNC_START_PROBE_DELAY = 8   # seconds
+APPSYNC_STOP_PROBE_DELAY  = 15  # seconds
+APPSYNC_RETRY_PROBE_DELAY = 8   # seconds
+
+# How long our own command keeps overriding AppSync while it has not caught
+# up. Rewrites were never slower than 22 s, so reaching this cap means the
+# controller never carried the command out.
+APPSYNC_CONFIRM_TIMEOUT = 60  # seconds
+
+# A finished station keeps its record, still flagged as running, until the
+# next rewrite. Past endsAt plus this margin the run is treated as over. The
+# margin covers the jitter seen in endsAt within a single run (up to 5 s).
+APPSYNC_END_GRACE = 10  # seconds
+
+# How far endsAt has to move for the record to be a *different* run rather
+# than the same one re-reported, which is how a stop override tells a real
+# restart from the stale record it is waiting to see disappear.
+APPSYNC_NEW_RUN_TOLERANCE = 10  # seconds
+
+# Extra refresh scheduled for the moment a run is expected to end, so the
+# zone does not sit on "running" until the next poll.
+APPSYNC_END_PROBE_DELAY = APPSYNC_END_GRACE + 1  # seconds
 
 
 def _parse_event_timestamp(ts: str | None) -> datetime | None:
@@ -219,6 +253,22 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         # do NOT need this; the live status endpoint reports them fine.
         self._optimistic_until: dict[int, float] = {}
 
+        # ── AppSync path state (MQTT controllers) ────────────────────────
+        # True while getStationStateList is answering; it decides whether a
+        # command schedules a confirmation refresh at all, since on the REST
+        # path there would be nothing new to read.
+        self._appsync_active = False
+        # station_id -> monotonic deadline: our command keeps overriding
+        # AppSync until it catches up or the deadline passes.
+        self._pending_starts: dict[int, float] = {}
+        # station_id -> (monotonic deadline, endsAt of the run we stopped)
+        self._pending_stops: dict[int, tuple[float, int | None]] = {}
+        # station_id -> endsAt last seen, so a stop knows which run it ended.
+        self._last_ends_at: dict[int, int | None] = {}
+        # Single pending extra refresh, with its monotonic deadline.
+        self._probe_unsub = None
+        self._probe_at: float | None = None
+
     def set_optimistic_running(self, station_id: int, duration_seconds: int) -> None:
         """Mark a station as running locally for duration_seconds.
 
@@ -231,6 +281,12 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         self._optimistic_until[station_id] = time.monotonic() + duration_seconds + 5
         # A fresh start supersedes any pending manual-stop override.
         self._manual_stops.pop(station_id, None)
+        self._pending_stops.pop(station_id, None)
+        # On the AppSync path the override is shorter-lived: it only bridges
+        # the gap until the controller's record shows up, and a start that
+        # never shows up is worth a warning.
+        self._pending_starts[station_id] = time.monotonic() + APPSYNC_CONFIRM_TIMEOUT
+        self._async_schedule_probe(APPSYNC_START_PROBE_DELAY)
 
     def mark_stopped(self, station_id: int) -> None:
         """Record that we just asked Rain Bird to stop this station.
@@ -243,11 +299,143 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         self._manual_stops[station_id] = datetime.now()
         # A stop supersedes any pending optimistic-run countdown.
         self._optimistic_until.pop(station_id, None)
+        self._pending_starts.pop(station_id, None)
+        # AppSync path: hold the zone at idle until the record for the run we
+        # just stopped is gone. endsAt identifies that run, so a station that
+        # comes back with a different one is a genuine restart rather than the
+        # stale record we are waiting on.
+        self._pending_stops[station_id] = (
+            time.monotonic() + APPSYNC_CONFIRM_TIMEOUT,
+            self._last_ends_at.get(station_id),
+        )
+        self._async_schedule_probe(APPSYNC_STOP_PROBE_DELAY)
+
+    def _resolve_appsync_station(
+        self, station_id: int, terminal: int, record: dict | None, live_status: str
+    ) -> tuple[bool, str, int | None]:
+        """Decide a station's state from AppSync, honouring our own commands.
+
+        Returns (is_running, status, run_ends_at).
+
+        Only state 1 counts as irrigating: a queued station of a running
+        program is listed too, with state 0. Pause still comes from the REST
+        status, since AppSync has never been seen reporting one and neither
+        the IQ4 app nor the website offer a pause control that could produce
+        it — they only advance to the next station or cancel everything.
+        """
+        record = record or {}
+        ends_at = record.get("endsAt")
+        self._last_ends_at[station_id] = ends_at
+
+        running = record.get("state") == 1
+        if running and ends_at is not None and time.time() > ends_at + APPSYNC_END_GRACE:
+            # The run is over and the controller simply has not rewritten its
+            # record yet, which takes up to another 22 s.
+            running = False
+
+        # A stop we asked for wins until the record of the run we stopped is
+        # gone. If the station comes back with a clearly different endsAt it
+        # is a new run, so the override steps aside.
+        pending_stop = self._pending_stops.get(station_id)
+        if pending_stop is not None:
+            deadline, stopped_ends_at = pending_stop
+            restarted = (
+                running
+                and ends_at is not None
+                and stopped_ends_at is not None
+                and abs(ends_at - stopped_ends_at) > APPSYNC_NEW_RUN_TOLERANCE
+            )
+            if not running or restarted or time.monotonic() > deadline:
+                del self._pending_stops[station_id]
+            else:
+                running = False
+
+        # A start we asked for bridges the gap until its record shows up.
+        pending_start = self._pending_starts.get(station_id)
+        if pending_start is not None:
+            if running:
+                del self._pending_starts[station_id]
+            elif time.monotonic() <= pending_start:
+                running = True
+            else:
+                del self._pending_starts[station_id]
+                _LOGGER.warning(
+                    "Station %s (terminal %s): Rain Bird accepted the start but "
+                    "the controller never reported it running within %ss",
+                    station_id, terminal, APPSYNC_CONFIRM_TIMEOUT,
+                )
+
+        if live_status == "P":
+            return False, "P", None
+        return running, ("R" if running else "-"), (ends_at if running else None)
+
+    @callback
+    def _async_schedule_probe(self, delay: float) -> None:
+        """Ask for one extra refresh in `delay` seconds.
+
+        Only one probe is ever pending and an earlier one always wins, so a
+        burst of commands cannot stack refreshes up. async_refresh is used
+        rather than async_request_refresh because the coordinator's debouncer
+        would hold the call back for its cooldown, which is longer than the
+        delays this exists to hit.
+        """
+        if delay <= 0 or not self._appsync_active:
+            return
+        deadline = time.monotonic() + delay
+        if (
+            self._probe_unsub is not None
+            and self._probe_at is not None
+            and self._probe_at <= deadline
+        ):
+            return
+        self._async_cancel_probe()
+        self._probe_at = deadline
+        self._probe_unsub = async_call_later(self.hass, delay, self._async_probe_fired)
+
+    @callback
+    def _async_probe_fired(self, _now) -> None:
+        self._probe_unsub = None
+        self._probe_at = None
+        self.hass.async_create_task(self.async_refresh())
+
+    @callback
+    def async_cancel_probe(self) -> None:
+        """Drop any pending probe, so no timer outlives the config entry."""
+        self._async_cancel_probe()
+
+    @callback
+    def _async_cancel_probe(self) -> None:
+        if self._probe_unsub is not None:
+            self._probe_unsub()
+            self._probe_unsub = None
+        self._probe_at = None
+
+    @callback
+    def _async_schedule_followup(self, data: dict[str, Any]) -> None:
+        """Book the next extra refresh after an update.
+
+        Two things are worth coming back for: a command of ours that AppSync
+        has not confirmed yet, and a run that is due to finish — without the
+        latter a finished zone would report as running until the next poll,
+        since the controller leaves its record in place for another rewrite
+        cycle. Whichever falls first is the one that gets scheduled.
+        """
+        if self._pending_starts or self._pending_stops:
+            self._async_schedule_probe(APPSYNC_RETRY_PROBE_DELAY)
+
+        ends = [
+            station["runEndsAt"]
+            for station in data.get("stations", [])
+            if station.get("isRunning") and station.get("runEndsAt")
+        ]
+        if ends:
+            self._async_schedule_probe(min(ends) + APPSYNC_END_PROBE_DELAY - time.time())
 
     async def _async_update_data(self) -> dict[str, Any]:
         try:
             data = await self.hass.async_add_executor_job(self._fetch_data)
             self._consecutive_errors = 0
+            self._async_schedule_followup(data)
             return data
         except Exception as err:
             self._consecutive_errors += 1
@@ -277,6 +465,12 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         # None when the controller is not MQTT-based or the call failed.
         local_sensor = self.api.get_local_sensor_state(sid)
 
+        # Live zone state from AppSync. None means we could not ask (non-MQTT
+        # controller, or the call failed) and every zone falls back to the
+        # REST status plus event log, exactly as before 1.5.0.
+        station_states = self.api.get_station_states(sid)
+        self._appsync_active = station_states is not None
+
         # Map stationId → live status
         station_live: dict[int, dict] = {}
         for prog in run_status:
@@ -305,7 +499,18 @@ class RainBirdCoordinator(DataUpdateCoordinator):
             events   = station_event_data.get(terminal, {})
             remaining = live.get("remaining")
             live_status = live.get("status", "-")
-            if live_status in ("R", "P"):
+            run_ends_at = None
+
+            if station_states is not None and terminal is not None:
+                # AppSync knows about manual starts, program runs and queued
+                # stations alike, so it replaces both the REST status and the
+                # event-log inference for this controller.
+                is_running, final_status, run_ends_at = self._resolve_appsync_station(
+                    sid_key, terminal, station_states.get(terminal), live_status
+                )
+                if not is_running:
+                    remaining = None
+            elif live_status in ("R", "P"):
                 # The real-time API gave an explicit status (running/paused) —
                 # trust it. The event log must never override an explicit P,
                 # since pausing a station doesn't emit a "station off" event
@@ -330,7 +535,10 @@ class RainBirdCoordinator(DataUpdateCoordinator):
             # fires in the no-explicit-status branch above and never
             # overrides a real R/P from the API. Evaluated before the
             # manual-stop override below so that a stop always wins.
-            optimistic_expiry = self._optimistic_until.get(sid_key)
+            optimistic_expiry = (
+                None if station_states is not None and terminal is not None
+                else self._optimistic_until.get(sid_key)
+            )
             if optimistic_expiry is not None:
                 if time.monotonic() < optimistic_expiry:
                     if live_status not in ("R", "P"):
@@ -340,7 +548,10 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                     # Expired — stop overriding, let real data speak.
                     self._optimistic_until.pop(sid_key, None)
 
-            stop_requested_at = self._manual_stops.get(sid_key)
+            stop_requested_at = (
+                None if station_states is not None and terminal is not None
+                else self._manual_stops.get(sid_key)
+            )
             if stop_requested_at is not None:
                 last_on = _parse_event_timestamp(events.get("lastRun"))
                 if last_on is not None and last_on > stop_requested_at:
@@ -350,7 +561,7 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                     final_status = "-" if final_status == "R" else final_status
                     remaining = None
 
-            stations_data.append({
+            station_data = {
                 "id":               sid_key,
                 "name":             s.get("name"),
                 "terminal":         terminal,
@@ -359,7 +570,13 @@ class RainBirdCoordinator(DataUpdateCoordinator):
                 "isRunning":        is_running,
                 "lastRun":          events.get("lastRun"),
                 "lastRunCompleted": events.get("lastRunCompleted"),
-            })
+            }
+            if station_states is not None and terminal is not None:
+                # Only present on controllers that report their own end time.
+                # Its absence is what tells the card that nothing better than
+                # a local estimate will ever arrive for this zone.
+                station_data["runEndsAt"] = run_ends_at
+            stations_data.append(station_data)
 
         return {
             "connection": {

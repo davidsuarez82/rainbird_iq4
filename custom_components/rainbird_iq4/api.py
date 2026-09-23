@@ -214,6 +214,18 @@ class RainBirdAPI:
     # Key of the local sensor (SEN terminals) record in the device state table.
     SK_RAIN_SENSOR_STATE = "Event#RainSensorState"
 
+    _STATION_STATE_LIST_QUERY = (
+        "query getStationStateList($DeviceUUID: String) {"
+        "  getStationStateList(DeviceUUID: $DeviceUUID) {"
+        "    items { SK Data TimeStamp }"
+        "  }"
+        "}"
+    )
+
+    # How far the controller's clock may sit from ours before endsAt is
+    # dropped. See get_station_states for why.
+    _STATION_STATE_MAX_CLOCK_SKEW = 300  # seconds
+
     def _graphql(self, query: str, variables: dict | None = None) -> dict | None:
         """POST a GraphQL document to AppSync.
 
@@ -358,6 +370,88 @@ class RainBirdAPI:
             return None
 
         return {"state": parsed["state"], "timestamp": record.get("TimeStamp")}
+
+    def get_station_states(self, satellite_id: int) -> dict[int, dict] | None:
+        """Live per-terminal station state from AppSync.
+
+        Returns {terminal: {"state", "remainSec", "programNumber",
+        "timestamp", "endsAt"}}. An empty dict means the controller lists
+        nothing, i.e. nothing running or queued. None means we could not ask
+        (not an MQTT controller, or the call failed) and the caller must keep
+        using the REST status.
+
+        Captured on an ESP-TM2 (2026-09-22), including program runs:
+
+        * state 1 is a station irrigating; state 0 is one queued by a running
+          program, so a record on its own does not mean water is flowing.
+        * The controller rewrites its records every 14-22 s while irrigating,
+          and immediately when a station starts. Skips and natural endings
+          wait for the next rewrite, which is why a finished station can stay
+          listed for another 12-19 s.
+        * Because of that cadence, endsAt (TimeStamp + remainSec) is published
+          instead of a countdown: it stays correct between rewrites, while
+          remainSec goes stale the moment it is read.
+
+        endsAt is only computed for running stations, and only when the
+        controller's TimeStamp sits within five minutes of our clock. Every
+        capture so far shows a true UTC epoch, but all of them come from the
+        same controller; should another firmware send local time instead, this
+        keeps a countdown that is hours out of the entity.
+        """
+        info = self.get_device_info(satellite_id)
+        device_uuid = info.get("deviceUUID")
+        if not device_uuid or not info.get("isMQTT"):
+            return None
+
+        data = self._graphql(
+            self._STATION_STATE_LIST_QUERY, {"DeviceUUID": device_uuid}
+        )
+        if data is None:
+            return None
+
+        items = (data.get("getStationStateList") or {}).get("items")
+        if items is None:
+            return None
+
+        now = time.time()
+        states: dict[int, dict] = {}
+        for item in items:
+            terminal = self._terminal_from_station_sk(item.get("SK"))
+            if terminal is None:
+                continue
+            parsed = self._parse_state_payload(item.get("Data"))
+            if parsed is None or parsed.get("state") is None:
+                continue
+
+            timestamp = item.get("TimeStamp")
+            remain = parsed.get("remainSec")
+            ends_at = None
+            if (
+                parsed["state"] == 1
+                and isinstance(timestamp, (int, float))
+                and isinstance(remain, (int, float))
+                and abs(now - timestamp) <= self._STATION_STATE_MAX_CLOCK_SKEW
+            ):
+                ends_at = int(timestamp + remain)
+
+            states[terminal] = {
+                "state": parsed["state"],
+                "remainSec": remain,
+                "programNumber": parsed.get("programNumber"),
+                "timestamp": timestamp,
+                "endsAt": ends_at,
+            }
+        return states
+
+    @staticmethod
+    def _terminal_from_station_sk(sk) -> int | None:
+        """Turn a "Station3" sort key into terminal 3."""
+        if not isinstance(sk, str) or not sk.startswith("Station"):
+            return None
+        try:
+            return int(sk[len("Station"):])
+        except ValueError:
+            return None
 
     def get_programs_assigned_runtime(self, satellite_id: int) -> list:
         """Get assigned run times per station per program."""

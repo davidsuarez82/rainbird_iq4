@@ -404,6 +404,11 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if entry_data:
+        # Drop the realtime coordinator's pending confirmation refresh, so a
+        # reload does not leave a timer firing against a dead coordinator.
+        entry_data["realtime"].async_cancel_probe()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         coordinators = hass.data[DOMAIN].pop(entry.entry_id)

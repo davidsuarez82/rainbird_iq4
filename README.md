@@ -112,7 +112,16 @@ After setup, click **Configure** on the integration to adjust the authentication
 | Alarms | Unacknowledged alarm count |
 | Warnings | Unacknowledged warning count |
 
-**Station attributes:** terminal, last_run, last_run_completed, remaining time, is_active
+**Station attributes:** terminal, last_run, last_run_completed, remaining time, run_ends_at, is_active
+
+`run_ends_at` is the timestamp at which the current run is due to finish, taken
+from the controller itself, and carries a value only while a zone is
+irrigating. The attribute is only published by controllers that report state
+over Rain Bird's MQTT channel (ESP-TM2 and similar); on the rest it is absent
+altogether and zone state keeps coming from the REST status and `remaining`
+alone. The card shows the requested duration until the controller's own end
+time arrives, then counts down in minutes and seconds from it; where the
+attribute is absent it keeps estimating from the requested duration instead.
 
 **Program attributes (Weekly):** start_time, schedule_type, week_days, steps, weather_adjust, seasonal_adjust, next_run
 
@@ -167,8 +176,14 @@ Card options:
 | `hide_inactive_programs` | `false` | Hide programs that are not scheduled or disabled |
 | `hide_inactive_stations` | `false` | Hide stations not assigned to any program |
 | `refresh_throttle_seconds` | `30` | Minimum seconds between refresh button calls from the card |
-| `start_refresh_delay_seconds` | `8` | Delay before refreshing after a zone starts |
-| `stop_refresh_delay_seconds` | `5` | Delay before refreshing after a zone stops |
+| `start_refresh_delay_seconds` | — | Ignored since v1.5.0 |
+| `stop_refresh_delay_seconds` | — | Ignored since v1.5.0 |
+
+Since v1.5.0 the integration schedules its own refreshes after a start or a
+stop, repeating until the controller confirms the command,
+and refreshes only the data that changes instead of everything the card's
+refresh button pulls. The two delay options above no longer do anything;
+leaving them in an existing card config is harmless.
 
 ---
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -207,13 +208,32 @@ class RainBirdStationSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         station = self._get_station()
-        return {
+        attributes = {
             "terminal":           station.get("terminal"),
             "remaining":          station.get("remaining"),
             "last_run":           station.get("lastRun"),
             "last_run_completed": station.get("lastRunCompleted"),
             "is_active":          self._is_active(),
         }
+        if "runEndsAt" in station:
+            attributes["run_ends_at"] = self._run_ends_at(station)
+        return attributes
+
+    @staticmethod
+    def _run_ends_at(station: dict) -> datetime | None:
+        """When the current run is due to finish, or None if not running.
+
+        Comes from the controller itself (AppSync), so it holds up between
+        polls and survives a restart of Home Assistant. Only MQTT-based
+        controllers report it; the rest keep `remaining` alone.
+        """
+        ends_at = station.get("runEndsAt")
+        if not ends_at:
+            return None
+        try:
+            return datetime.fromtimestamp(ends_at, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to coordinator updates."""
