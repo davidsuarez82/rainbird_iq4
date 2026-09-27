@@ -10,11 +10,13 @@ CONF_COMPANY_ID = "company_id"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_SCAN_INTERVAL_CONFIG = "scan_interval_config"
 CONF_SCAN_INTERVAL_PROGRAM = "scan_interval_program"
+CONF_ENABLE_REALTIME = "enable_realtime"
 
 # Defaults
 DEFAULT_SCAN_INTERVAL = 30          # seconds — real-time data
 DEFAULT_SCAN_INTERVAL_CONFIG = 300  # seconds — satellite config (5 min)
 DEFAULT_SCAN_INTERVAL_PROGRAM = 3600  # seconds — programs (1 hour)
+DEFAULT_ENABLE_REALTIME = True      # live zone state over the AppSync socket
 DEFAULT_NAME = "Rain Bird IQ4"
 
 # Rain Bird API

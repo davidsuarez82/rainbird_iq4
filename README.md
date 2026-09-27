@@ -202,6 +202,24 @@ from the controller itself and are never translated.
 
 Entity IDs are unchanged.
 
+### Live updates
+
+On controllers that report over Rain Bird's MQTT channel, the integration also
+keeps a WebSocket open to the same real-time channel the IQ4 website uses, and
+applies zone state, the local sensor and the controller's online state about a
+second after the controller reports them, instead of waiting for the next poll.
+Zones started from the Rain Bird app or the controller's own panel show up just
+as quickly.
+
+Polling continues regardless: alarms, programs, rain delay, zone names and the
+event log have no real-time equivalent, and polling is also the safety net for
+a connection that goes quiet. While live updates are flowing, the real-time
+poll interval drops to 120 seconds on its own and returns to the configured
+one when they stop.
+
+Turn it off under the integration's options if a firewall blocks the
+connection; everything then works as it did before v1.7.0.
+
 ---
 
 ## Actions

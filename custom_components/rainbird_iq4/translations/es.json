@@ -41,10 +41,12 @@
           "auth_channel": "Canal de autenticación",
           "scan_interval": "Intervalo de consulta de datos en tiempo real (segundos)",
           "scan_interval_config": "Intervalo de consulta de la configuración del programador (segundos)",
-          "scan_interval_program": "Intervalo de consulta de los programas (segundos)"
+          "scan_interval_program": "Intervalo de consulta de los programas (segundos)",
+          "enable_realtime": "Actualizaciones en vivo por el canal en tiempo real de Rain Bird"
         },
         "data_description": {
-          "auth_channel": "Cómo inicia sesión la integración. Deja «Portal web» para la mayoría de las cuentas. Elige «Aplicación móvil» solo si el control de zonas falla con un error 403 (por ejemplo, cuentas gratuitas de EE. UU.). Cambiarlo recarga la integración."
+          "auth_channel": "Cómo inicia sesión la integración. Deja «Portal web» para la mayoría de las cuentas. Elige «Aplicación móvil» solo si el control de zonas falla con un error 403 (por ejemplo, cuentas gratuitas de EE. UU.). Cambiarlo recarga la integración.",
+          "enable_realtime": "Aplica los cambios de estado según los informa el controlador, en aproximadamente un segundo, en vez de esperar a la siguiente consulta. Solo los controladores MQTT informan así, y la consulta periódica se mantiene en cualquier caso. Desactívalo si un cortafuegos bloquea la conexión."
         }
       }
     }

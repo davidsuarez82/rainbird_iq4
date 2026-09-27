@@ -41,10 +41,12 @@
           "auth_channel": "Authentication channel",
           "scan_interval": "Real-time data poll interval (seconds)",
           "scan_interval_config": "Controller config poll interval (seconds)",
-          "scan_interval_program": "Program poll interval (seconds)"
+          "scan_interval_program": "Program poll interval (seconds)",
+          "enable_realtime": "Live updates over Rain Bird's real-time channel"
         },
         "data_description": {
-          "auth_channel": "How the integration logs in. Leave on \"Web portal\" for most accounts. Choose \"Mobile app\" only if zone control fails with a 403 error (e.g. US free-tier accounts). Changing this reloads the integration."
+          "auth_channel": "How the integration logs in. Leave on \"Web portal\" for most accounts. Choose \"Mobile app\" only if zone control fails with a 403 error (e.g. US free-tier accounts). Changing this reloads the integration.",
+          "enable_realtime": "Applies state changes as the controller reports them, in about a second, instead of waiting for the next poll. Only MQTT-based controllers report this way; polling continues either way. Turn this off if a firewall blocks the connection."
         }
       }
     }
