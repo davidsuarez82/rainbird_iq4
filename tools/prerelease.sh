@@ -30,6 +30,51 @@ if diff -q <(jq -S . "$COMP/strings.json") \
 else
   fail "strings.json and translations/en.json diverge"
 fi
+# Every other language is checked against strings.json for missing or stray
+# keys and for placeholders such as {program}, which a translation must keep
+# for the entity name to render at all.
+translation_problems=$(COMP="$COMP" python3 - <<'PY'
+import json, os, pathlib, re
+
+base = pathlib.Path(os.environ["COMP"])
+
+def flatten(data, prefix=""):
+    flat = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            flat.update(flatten(value, f"{prefix}{key}."))
+        else:
+            flat[prefix + key] = value
+    return flat
+
+reference = flatten(json.loads((base / "strings.json").read_text()))
+problems = []
+for path in sorted((base / "translations").glob("*.json")):
+    if path.name == "en.json":
+        continue
+    try:
+        translation = flatten(json.loads(path.read_text()))
+    except ValueError as err:
+        problems.append(f"{path.name}: invalid JSON ({err})")
+        continue
+    for key in sorted(set(reference) - set(translation)):
+        problems.append(f"{path.name}: missing {key}")
+    for key in sorted(set(translation) - set(reference)):
+        problems.append(f"{path.name}: unknown key {key}")
+    for key, value in sorted(translation.items()):
+        if key in reference:
+            expected = set(re.findall(r"\{(\w+)\}", reference[key]))
+            if expected != set(re.findall(r"\{(\w+)\}", value)):
+                problems.append(f"{path.name}: {key} should keep the placeholders {sorted(expected)}")
+print("\n".join(problems))
+PY
+)
+languages=$(ls "$COMP"/translations/*.json | grep -v '/en.json$' | wc -l)
+if [ -n "$translation_problems" ]; then
+  fail "$translation_problems"
+else
+  pass "$languages other language file(s) match strings.json"
+fi
 echo
 
 echo "[3] no credentials staged"

@@ -189,8 +189,13 @@ leaving them in an existing card config is harmless.
 
 Since v1.6.0 entity names come from the integration's translation files rather
 than being built in code, so Home Assistant shows them in its own language
-where a translation exists. English ships with the integration; contributions
-for other languages are welcome. Displayed names read the same as before
+where a translation exists. English, French and Spanish ship with the
+integration; contributions for other languages are welcome — add
+`translations/<code>.json` with the same keys as `translations/en.json`.
+
+Entity names follow the language of the Home Assistant instance, set under
+Settings > System > General, because Home Assistant resolves an entity's name
+when it registers it. Entity states follow each user's own profile language. Displayed names read the same as before
 (`<controller> Alarms`, `<controller> Program A Status`) because Home Assistant
 composes them from the device name plus the entity name. Zone names still come
 from the controller itself and are never translated.

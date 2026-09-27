@@ -1,0 +1,122 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rain Bird IQ4",
+        "description": "Introduce las credenciales de tu cuenta en la nube de Rain Bird IQ4.",
+        "data": {
+          "username": "Correo electrónico o nombre de la cuenta",
+          "password": "Contraseña",
+          "auth_channel": "Canal de autenticación"
+        },
+        "data_description": {
+          "username": "Si el inicio de sesión con el correo falla con un desafío de AWS WAF (HTTP 202), prueba con el nombre de tu cuenta de Rain Bird. Es el nombre editable que aparece en Account Settings en la web de IQ4 (por ejemplo, «John Smith»), no el «Account ID» numérico que muestra la aplicación móvil, que aquí no funciona.",
+          "auth_channel": "Cómo inicia sesión la integración. Deja «Portal web» para la mayoría de las cuentas. Elige «Aplicación móvil» solo si el control de zonas falla con un error 403 (por ejemplo, cuentas gratuitas de EE. UU.)."
+        }
+      },
+      "select_controller": {
+        "title": "Selecciona el programador",
+        "description": "Se han encontrado varios programadores en esta cuenta. Elige el que quieras añadir.",
+        "data": {
+          "satellite_id": "Programador"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Inicio de sesión rechazado. Revisa el usuario y la contraseña, y prueba a entrar en https://iq4.rainbird.com: puede que la cuenta necesite un cambio de contraseña o aceptar nuevas condiciones.",
+      "waf_challenge": "La protección antibots de Rain Bird bloqueó el inicio de sesión antes de llegar al formulario. No es un problema de credenciales y suele ser temporal: espera unos minutos y vuelve a intentarlo.",
+      "cannot_connect": "No se pudo conectar. Revisa tus credenciales y tu conexión a internet, y vuelve a intentarlo.",
+      "no_controllers": "No se ha encontrado ningún programador en esta cuenta.",
+      "unknown": "Se ha producido un error inesperado. Consulta los registros para más detalles."
+    },
+    "abort": {
+      "already_configured": "Este programador ya está configurado."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Opciones de Rain Bird IQ4",
+        "data": {
+          "auth_channel": "Canal de autenticación",
+          "scan_interval": "Intervalo de consulta de datos en tiempo real (segundos)",
+          "scan_interval_config": "Intervalo de consulta de la configuración del programador (segundos)",
+          "scan_interval_program": "Intervalo de consulta de los programas (segundos)"
+        },
+        "data_description": {
+          "auth_channel": "Cómo inicia sesión la integración. Deja «Portal web» para la mayoría de las cuentas. Elige «Aplicación móvil» solo si el control de zonas falla con un error 403 (por ejemplo, cuentas gratuitas de EE. UU.). Cambiarlo recarga la integración."
+        }
+      }
+    }
+  },
+  "selector": {
+    "auth_channel": {
+      "options": {
+        "web": "Portal web (predeterminado): funciona para la mayoría de las cuentas",
+        "app": "Aplicación móvil: úsalo si el control de zonas falla con un 403 (por ejemplo, cuenta gratuita de EE. UU.)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "alarms": {
+        "name": "Alarmas"
+      },
+      "warnings": {
+        "name": "Avisos"
+      },
+      "rain_delay": {
+        "name": "Pausa por lluvia"
+      },
+      "controller_mode": {
+        "name": "Modo del programador",
+        "state": {
+          "off": "Apagado",
+          "auto": "Automático"
+        }
+      },
+      "station": {
+        "state": {
+          "idle": "Inactiva",
+          "running": "Regando",
+          "paused": "En pausa"
+        }
+      },
+      "program_status": {
+        "name": "Estado del programa {program}",
+        "state": {
+          "scheduled": "Programado",
+          "not_scheduled": "Sin programar",
+          "disabled": "Desactivado"
+        }
+      }
+    },
+    "binary_sensor": {
+      "connected": {
+        "name": "Conectado"
+      },
+      "any_zone_running": {
+        "name": "Alguna zona regando"
+      },
+      "forecast_rain_delay": {
+        "name": "Pausa por previsión de lluvia"
+      },
+      "local_sensor": {
+        "name": "Sensor local"
+      },
+      "rain_sensor": {
+        "name": "Sensor de lluvia"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Actualizar"
+      }
+    },
+    "calendar": {
+      "program_schedule": {
+        "name": "Calendario del programa {program}"
+      }
+    }
+  }
+}
