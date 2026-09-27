@@ -1,0 +1,122 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rain Bird IQ4",
+        "description": "Saisissez les identifiants de votre compte Rain Bird IQ4 dans le cloud.",
+        "data": {
+          "username": "Adresse e-mail ou nom du compte",
+          "password": "Mot de passe",
+          "auth_channel": "Méthode d'authentification"
+        },
+        "data_description": {
+          "username": "Si la connexion avec votre adresse e-mail échoue à cause d'un contrôle AWS WAF (HTTP 202), essayez le nom de votre compte Rain Bird. Il s'agit du nom d'affichage modifiable dans les paramètres du compte sur le site IQ4 (par exemple « Jean Dupont »), et non de l'identifiant numérique du compte (« Account ID ») affiché dans l'application mobile, qui ne fonctionne pas ici.",
+          "auth_channel": "Méthode utilisée par l'intégration pour se connecter. Conservez « Portail web » pour la plupart des comptes. Choisissez « Application mobile » uniquement si la commande des zones échoue avec une erreur 403 (par exemple avec les comptes gratuits aux États-Unis)."
+        }
+      },
+      "select_controller": {
+        "title": "Sélectionner un programmateur",
+        "description": "Plusieurs programmateurs ont été trouvés sur ce compte. Choisissez celui à ajouter.",
+        "data": {
+          "satellite_id": "Programmateur"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Connexion refusée. Vérifiez votre nom d'utilisateur et votre mot de passe, puis essayez de vous connecter sur https://iq4.rainbird.com. Le compte peut nécessiter un changement de mot de passe ou l'acceptation de nouvelles conditions d'utilisation.",
+      "waf_challenge": "La protection contre les robots de Rain Bird a bloqué la connexion avant l'affichage du formulaire. Il ne s'agit pas d'un problème d'identifiants. Ce blocage est généralement temporaire : attendez quelques minutes, puis réessayez.",
+      "cannot_connect": "Connexion impossible. Vérifiez vos identifiants et votre connexion Internet, puis réessayez.",
+      "no_controllers": "Aucun programmateur n'a été trouvé sur ce compte.",
+      "unknown": "Une erreur inattendue s'est produite. Consultez les journaux pour plus de détails."
+    },
+    "abort": {
+      "already_configured": "Ce programmateur est déjà configuré."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options de Rain Bird IQ4",
+        "data": {
+          "auth_channel": "Méthode d'authentification",
+          "scan_interval": "Intervalle d'actualisation des données en temps réel (secondes)",
+          "scan_interval_config": "Intervalle d'actualisation de la configuration du programmateur (secondes)",
+          "scan_interval_program": "Intervalle d'actualisation des programmes (secondes)"
+        },
+        "data_description": {
+          "auth_channel": "Méthode utilisée par l'intégration pour se connecter. Conservez « Portail web » pour la plupart des comptes. Choisissez « Application mobile » uniquement si la commande des zones échoue avec une erreur 403 (par exemple avec les comptes gratuits aux États-Unis). La modification de cette option recharge l'intégration."
+        }
+      }
+    }
+  },
+  "selector": {
+    "auth_channel": {
+      "options": {
+        "web": "Portail web (par défaut) — fonctionne avec la plupart des comptes",
+        "app": "Application mobile — à utiliser si la commande des zones échoue avec une erreur 403 (par exemple avec les comptes gratuits aux États-Unis)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "alarms": {
+        "name": "Alarmes"
+      },
+      "warnings": {
+        "name": "Avertissements"
+      },
+      "rain_delay": {
+        "name": "Report d'arrosage"
+      },
+      "controller_mode": {
+        "name": "Mode du programmateur",
+        "state": {
+          "off": "Arrêt",
+          "auto": "Automatique"
+        }
+      },
+      "station": {
+        "state": {
+          "idle": "Inactif",
+          "running": "En cours",
+          "paused": "En pause"
+        }
+      },
+      "program_status": {
+        "name": "État du programme {program}",
+        "state": {
+          "scheduled": "Programmé",
+          "not_scheduled": "Non programmé",
+          "disabled": "Désactivé"
+        }
+      }
+    },
+    "binary_sensor": {
+      "connected": {
+        "name": "Connecté"
+      },
+      "any_zone_running": {
+        "name": "Arrosage en cours"
+      },
+      "forecast_rain_delay": {
+        "name": "Report d'arrosage selon les prévisions de pluie"
+      },
+      "local_sensor": {
+        "name": "Capteur local"
+      },
+      "rain_sensor": {
+        "name": "Capteur de pluie"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Actualiser"
+      }
+    },
+    "calendar": {
+      "program_schedule": {
+        "name": "Calendrier du programme {program}"
+      }
+    }
+  }
+}
