@@ -66,6 +66,9 @@ async def async_setup_entry(
 class RainBirdConnectionBinarySensor(BinarySensorEntity):
     """Binary sensor reporting whether the controller is connected — real-time."""
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "connected"
+
     def __init__(
         self,
         coordinator: RainBirdCoordinator,
@@ -77,7 +80,6 @@ class RainBirdConnectionBinarySensor(BinarySensorEntity):
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_connected"
-        self._attr_name = f"{self._satellite_name} Connected"
         self._attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
         self._attr_icon = "mdi:cloud-check"
 
@@ -117,6 +119,9 @@ class RainBirdAnyZoneRunningBinarySensor(BinarySensorEntity):
     irrigation is running" or "notify when irrigation starts".
     """
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "any_zone_running"
+
     def __init__(
         self,
         coordinator: RainBirdCoordinator,
@@ -128,7 +133,6 @@ class RainBirdAnyZoneRunningBinarySensor(BinarySensorEntity):
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_any_zone_running"
-        self._attr_name = f"{self._satellite_name} Any Zone Running"
         self._attr_device_class = BinarySensorDeviceClass.RUNNING
         self._attr_icon = "mdi:sprinkler-variant"
 
@@ -173,13 +177,15 @@ class RainBirdAnyZoneRunningBinarySensor(BinarySensorEntity):
 class RainBirdForecastBinarySensor(CoordinatorEntity, BinarySensorEntity):
     """Binary sensor reporting whether forecast rain delay is enabled — config polling."""
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "forecast_rain_delay"
+
     def __init__(self, coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
         self._satellite_id = coordinator.satellite_id
         satellite = coordinator.data.get("satellite", {}) if coordinator.data else {}
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_forecast_enabled"
-        self._attr_name = f"{self._satellite_name} Forecast Rain Delay"
         self._attr_device_class = BinarySensorDeviceClass.RUNNING
         self._attr_icon = "mdi:weather-lightning-rainy"
 
@@ -230,6 +236,9 @@ class RainBirdLocalSensorBinarySensor(BinarySensorEntity):
     cannot back this.
     """
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "local_sensor"
+
     def __init__(
         self,
         coordinator: RainBirdCoordinator,
@@ -241,7 +250,6 @@ class RainBirdLocalSensorBinarySensor(BinarySensorEntity):
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_local_sensor"
-        self._attr_name = f"{self._satellite_name} Local Sensor"
         self._attr_device_class = BinarySensorDeviceClass.MOISTURE
         self._attr_icon = "mdi:water-alert"
 
@@ -311,6 +319,9 @@ class RainBirdRainSensor(CoordinatorEntity, BinarySensorEntity):
     terminals themselves, see RainBirdLocalSensorBinarySensor above.
     """
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "rain_sensor"
+
     def __init__(self, coordinator: RainBirdConfigCoordinator, sensor: dict) -> None:
         super().__init__(coordinator)
         self._sensor_id = sensor["id"]
@@ -318,7 +329,10 @@ class RainBirdRainSensor(CoordinatorEntity, BinarySensorEntity):
         satellite = coordinator.data.get("satellite", {}) if coordinator.data else {}
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_sensor_{self._sensor_id}"
-        self._attr_name = f"{self._satellite_name} {sensor.get('name', 'Rain Sensor')}"
+        # Named by the controller when it says so; otherwise the translated
+        # fallback from translation_key is used.
+        if sensor.get("name"):
+            self._attr_name = sensor["name"]
         self._attr_device_class = BinarySensorDeviceClass.MOISTURE
         self._attr_icon = "mdi:weather-rainy"
 

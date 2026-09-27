@@ -10,7 +10,7 @@
           "auth_channel": "Authentication channel"
         },
         "data_description": {
-          "username": "If login fails with an AWS WAF challenge (HTTP 202) using your email, try your Rain Bird account name instead. This is the editable display name found under Account Settings on the IQ4 website (e.g. \u201cJohn Smith\u201d) \u2014 not the numeric \u201cAccount ID\u201d shown in the mobile app, which won't work here.",
+          "username": "If login fails with an AWS WAF challenge (HTTP 202) using your email, try your Rain Bird account name instead. This is the editable display name found under Account Settings on the IQ4 website (e.g. “John Smith”) — not the numeric “Account ID” shown in the mobile app, which won't work here.",
           "auth_channel": "How the integration logs in. Leave on \"Web portal\" for most accounts. Choose \"Mobile app\" only if zone control fails with a 403 error (e.g. US free-tier accounts)."
         }
       },
@@ -23,8 +23,8 @@
       }
     },
     "error": {
-      "invalid_auth": "Login rejected. Check your username and password, and try signing in at https://iq4.rainbird.com \u2014 the account may need a password change or new terms accepted.",
-      "waf_challenge": "Rain Bird's bot protection blocked the login before it reached the sign-in form. This is not a credentials problem and is usually temporary \u2014 wait a few minutes and try again.",
+      "invalid_auth": "Login rejected. Check your username and password, and try signing in at https://iq4.rainbird.com — the account may need a password change or new terms accepted.",
+      "waf_challenge": "Rain Bird's bot protection blocked the login before it reached the sign-in form. This is not a credentials problem and is usually temporary — wait a few minutes and try again.",
       "cannot_connect": "Failed to connect. Check your credentials and internet connection, then try again.",
       "no_controllers": "No controllers were found on this account.",
       "unknown": "An unexpected error occurred. See the logs for details."
@@ -54,6 +54,68 @@
       "options": {
         "web": "Web portal (default) — works for most accounts",
         "app": "Mobile app — use if zone control fails with 403 (e.g. US free tier)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "alarms": {
+        "name": "Alarms"
+      },
+      "warnings": {
+        "name": "Warnings"
+      },
+      "rain_delay": {
+        "name": "Rain Delay"
+      },
+      "controller_mode": {
+        "name": "Controller Mode",
+        "state": {
+          "off": "Off",
+          "auto": "Auto"
+        }
+      },
+      "station": {
+        "state": {
+          "idle": "Idle",
+          "running": "Running",
+          "paused": "Paused"
+        }
+      },
+      "program_status": {
+        "name": "Program {program} Status",
+        "state": {
+          "scheduled": "Scheduled",
+          "not_scheduled": "Not scheduled",
+          "disabled": "Disabled"
+        }
+      }
+    },
+    "binary_sensor": {
+      "connected": {
+        "name": "Connected"
+      },
+      "any_zone_running": {
+        "name": "Any Zone Running"
+      },
+      "forecast_rain_delay": {
+        "name": "Forecast Rain Delay"
+      },
+      "local_sensor": {
+        "name": "Local Sensor"
+      },
+      "rain_sensor": {
+        "name": "Rain Sensor"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Refresh"
+      }
+    },
+    "calendar": {
+      "program_schedule": {
+        "name": "Program {program} Schedule"
       }
     }
   }

@@ -73,13 +73,16 @@ class RainBirdBaseSensor(CoordinatorEntity, SensorEntity):
 class RainBirdAlarmSensor(CoordinatorEntity, SensorEntity):
     """Sensor reporting number of unacknowledged alarms — real-time."""
 
+    # has_entity_name lets Home Assistant compose the displayed name from the
+    # device name plus the translated entity name, which is what the hardcoded
+    # "<controller> Alarms" was doing by hand. The result reads the same.
+    _attr_has_entity_name = True
+    _attr_translation_key = "alarms"
+
     def __init__(self, coordinator: RainBirdCoordinator, config_coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
         self._satellite_id = coordinator.satellite_id
-        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
-        satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_alarms"
-        self._attr_name = f"{satellite_name} Alarms"
         self._attr_icon = "mdi:alarm-light"
         self._attr_native_unit_of_measurement = "alarms"
 
@@ -95,13 +98,13 @@ class RainBirdAlarmSensor(CoordinatorEntity, SensorEntity):
 class RainBirdWarningSensor(CoordinatorEntity, SensorEntity):
     """Sensor reporting number of unacknowledged warnings — real-time."""
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "warnings"
+
     def __init__(self, coordinator: RainBirdCoordinator, config_coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
         self._satellite_id = coordinator.satellite_id
-        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
-        satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_warnings"
-        self._attr_name = f"{satellite_name} Warnings"
         self._attr_icon = "mdi:alert"
         self._attr_native_unit_of_measurement = "warnings"
 
@@ -117,13 +120,15 @@ class RainBirdWarningSensor(CoordinatorEntity, SensorEntity):
 class RainBirdRainDelaySensor(CoordinatorEntity, SensorEntity):
     """Sensor reporting current rain delay in days — config polling."""
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "rain_delay"
+
     def __init__(self, coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
         self._satellite_id = coordinator.satellite_id
         satellite = coordinator.data.get("satellite", {}) if coordinator.data else {}
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_rain_delay_sensor"
-        self._attr_name = f"{self._satellite_name} Rain Delay"
         self._attr_icon = "mdi:weather-rainy"
         self._attr_native_unit_of_measurement = "days"
 
@@ -148,6 +153,10 @@ class RainBirdStationSensor(SensorEntity):
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = ["idle", "running", "paused"]
+    # The zone name comes from the controller, so only the states are
+    # translated; translation_key is what points at them.
+    _attr_has_entity_name = True
+    _attr_translation_key = "station"
 
     def __init__(
         self,
@@ -164,7 +173,7 @@ class RainBirdStationSensor(SensorEntity):
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_station_{self._station_id}"
-        self._attr_name = f"{self._satellite_name} {station['name']}"
+        self._attr_name = station.get("name") or f"Station {station.get('terminal', self._station_id)}"
         self._attr_icon = "mdi:sprinkler"
 
     @property
@@ -256,7 +265,9 @@ class RainBirdProgramSensor(SensorEntity):
     """Sensor reporting the configuration of an irrigation program — program polling."""
 
     _attr_device_class = SensorDeviceClass.ENUM
-    _attr_options = ["scheduled", "not scheduled", "disabled"]
+    _attr_options = ["scheduled", "not_scheduled", "disabled"]
+    _attr_has_entity_name = True
+    _attr_translation_key = "program_status"
 
     def __init__(
         self,
@@ -271,7 +282,7 @@ class RainBirdProgramSensor(SensorEntity):
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_program_{self._program_id}"
-        self._attr_name = f"{self._satellite_name} Program {program['shortName']} Status"
+        self._attr_translation_placeholders = {"program": program["shortName"]}
         self._attr_icon = "mdi:calendar-clock"
 
     @property
@@ -299,10 +310,10 @@ class RainBirdProgramSensor(SensorEntity):
         if not program.get("isEnabled"):
             return "disabled"
         if not program.get("startTime"):
-            return "not scheduled"
+            return "not_scheduled"
         program_type = program.get("programType", PROGRAM_TYPE_WEEKLY)
         if program_type == PROGRAM_TYPE_WEEKLY and not program.get("weekDays"):
-            return "not scheduled"
+            return "not_scheduled"
         return "scheduled"
 
     @property
@@ -367,13 +378,17 @@ class RainBirdControllerModeSensor(CoordinatorEntity, SensorEntity):
 
     MODES = {1: "off", 2: "auto"}
 
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["off", "auto"]
+    _attr_has_entity_name = True
+    _attr_translation_key = "controller_mode"
+
     def __init__(self, coordinator: RainBirdConfigCoordinator) -> None:
         super().__init__(coordinator)
         self._satellite_id = coordinator.satellite_id
         satellite = coordinator.data.get("satellite", {}) if coordinator.data else {}
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_controller_mode"
-        self._attr_name = f"{self._satellite_name} Controller Mode"
         self._attr_icon = "mdi:controller"
 
     @property
@@ -388,6 +403,12 @@ class RainBirdControllerModeSensor(CoordinatorEntity, SensorEntity):
         )
 
     @property
-    def native_value(self) -> str:
+    def native_value(self) -> str | None:
+        """Operating mode, or None for a value outside MODES.
+
+        An enum sensor may only report one of its declared options, so an
+        unrecognised mode returns None and Home Assistant shows it as unknown,
+        exactly as the literal "unknown" string did before.
+        """
         mode = self.coordinator.data.get("satellite", {}).get("systemMode") if self.coordinator.data else None
-        return self.MODES.get(mode, "unknown")
+        return self.MODES.get(mode)

@@ -106,7 +106,7 @@ After setup, click **Configure** on the integration to adjust the authentication
 | Entity | Description |
 |---|---|
 | Station 001–N | Zone status: `idle` / `running` / `paused` |
-| Program A–N Status | Program status: `scheduled` / `not scheduled` / `disabled` |
+| Program A–N Status | Program status: `scheduled` / `not_scheduled` / `disabled` |
 | Rain Delay | Days remaining (0 = no delay) |
 | Controller Mode | `auto` / `off` |
 | Alarms | Unacknowledged alarm count |
@@ -184,6 +184,18 @@ stop, repeating until the controller confirms the command,
 and refreshes only the data that changes instead of everything the card's
 refresh button pulls. The two delay options above no longer do anything;
 leaving them in an existing card config is harmless.
+
+### Entity names and languages
+
+Since v1.6.0 entity names come from the integration's translation files rather
+than being built in code, so Home Assistant shows them in its own language
+where a translation exists. English ships with the integration; contributions
+for other languages are welcome. Displayed names read the same as before
+(`<controller> Alarms`, `<controller> Program A Status`) because Home Assistant
+composes them from the device name plus the entity name. Zone names still come
+from the controller itself and are never translated.
+
+Entity IDs are unchanged.
 
 ---
 

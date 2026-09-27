@@ -28,19 +28,14 @@ async def async_setup_entry(
 class RainBirdRefreshButton(ButtonEntity):
     """Button to force a refresh of all Rain Bird coordinators."""
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "refresh"
+
     def __init__(self, coordinators: dict) -> None:
         self._coordinators = coordinators
         coordinator = coordinators["realtime"]
-        config_coordinator = coordinators["config"]
-        # The realtime coordinator's data never contains a "satellite" key
-        # (see RainBirdCoordinator._fetch_data) — only the config coordinator
-        # does. Reading it from the wrong coordinator silently fell back to
-        # the generic "Rain Bird IQ4" name for every controller.
-        satellite = config_coordinator.data.get("satellite", {}) if config_coordinator.data else {}
         satellite_id = coordinator.satellite_id
-        satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{satellite_id}_refresh"
-        self._attr_name = f"{satellite_name} Refresh"
         self._attr_icon = "mdi:refresh"
 
     @property

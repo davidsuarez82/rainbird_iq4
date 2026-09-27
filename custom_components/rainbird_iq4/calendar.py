@@ -141,6 +141,9 @@ def _make_event(
 class RainBirdCalendar(CalendarEntity):
     """Calendar entity showing scheduled irrigation events for one program."""
 
+    _attr_has_entity_name = True
+    _attr_translation_key = "program_schedule"
+
     def __init__(
         self,
         coordinator: RainBirdProgramCoordinator,
@@ -156,7 +159,7 @@ class RainBirdCalendar(CalendarEntity):
         self._satellite_id = coordinator.satellite_id
         self._satellite_name = satellite.get("name", "Rain Bird IQ4")
         self._attr_unique_id = f"{self._satellite_id}_calendar_{self._program_id}"
-        self._attr_name = f"{self._satellite_name} Program {program['shortName']} Schedule"
+        self._attr_translation_placeholders = {"program": program["shortName"]}
         self._attr_icon = "mdi:calendar-clock"
 
     @property

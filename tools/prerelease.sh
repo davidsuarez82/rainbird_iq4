@@ -86,7 +86,39 @@ else
 fi
 echo
 
-echo "[5] version bumped"
+echo "[5] entity translation keys"
+missing=$(python3 - <<'PY'
+import ast, json, pathlib
+base = pathlib.Path("custom_components/rainbird_iq4")
+strings = json.loads((base / "strings.json").read_text()).get("entity", {})
+platforms = {"sensor.py": "sensor", "binary_sensor.py": "binary_sensor",
+             "button.py": "button", "calendar.py": "calendar"}
+problems, used = [], set()
+for filename, domain in platforms.items():
+    for node in ast.walk(ast.parse((base / filename).read_text())):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign) and getattr(stmt.targets[0], "id", "") == "_attr_translation_key":
+                key = stmt.value.value
+                used.add(f"{domain}.{key}")
+                if key not in strings.get(domain, {}):
+                    problems.append(f"{domain}.{key} used by {node.name} but missing from strings.json")
+for domain, keys in strings.items():
+    for key in keys:
+        if f"{domain}.{key}" not in used:
+            problems.append(f"{domain}.{key} in strings.json but used by no entity")
+print("\n".join(problems))
+PY
+)
+if [ -n "$missing" ]; then
+  fail "$missing"
+else
+  pass "every translation key matches an entity"
+fi
+echo
+
+echo "[6] version bumped"
 VERSION=$(jq -r .version "$COMP/manifest.json")
 if [ -n "$LAST_TAG" ] && git diff --quiet "$LAST_TAG" -- "$COMP"; then
   # Nothing under custom_components/ has changed since the last tag, so this
