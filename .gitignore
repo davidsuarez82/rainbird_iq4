@@ -6,3 +6,4 @@ __pycache__/
 
 # Diagnostic dumps (may contain account identifiers)
 *diagnostic_*.json
+tools/subscription_probe_*.jsonl

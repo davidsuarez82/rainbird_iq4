@@ -26,6 +26,21 @@ Your username and password are sent only to Rain Bird's own servers (`iq4server.
 
 A read-only helper that logs in the same way and prints the raw station list for each controller (showing the internal `id` used for control vs. the `terminal` number). Useful for debugging station-identification issues. Never starts or stops anything.
 
+## probe_subscription.py
+
+Opens the real-time WebSocket the `iq4.rainbird.com` website uses and subscribes to `onUpdateDeviceStateTable` for one controller, with the same token the integration uses. Every frame the server sends is written, with a timestamp, to `subscription_probe_<timestamp>.jsonl`; the token itself is never printed or saved.
+
+It answers what a push-based zone state would depend on: whether the token is accepted over WebSocket, how zone changes arrive, how regular the keep-alives are, and what the server does once the token the connection was opened with expires. It never reconnects and never sends a command, so start and stop zones from the app, the website or Home Assistant while it runs.
+
+Needs `probe_appsync.py` in the same directory, and `aiohttp` on top of `curl_cffi`:
+
+```bash
+pip install curl_cffi aiohttp
+python3 probe_subscription.py you@example.com --hours 3
+```
+
+`--gateway` also subscribes with the controller's `ioTGatewayUUID`, as the website does.
+
 ## Who should run these
 
 Mainly useful for **US-based accounts** that get a 403 from the integration on zone control. Not needed if the integration already works for you.
