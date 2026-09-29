@@ -8,7 +8,11 @@ rather than having to be inferred.
 
 Measured on an ESP-TM2 (2026-09-24), and the numbers below come from it:
 
-* Keep-alives arrive every 60.0 s, with no drift over three hours.
+* Keep-alives arrive every 60.0 s over hours at a time, but not always: on
+  the night of 2026-09-29 four gaps of about 96 s were measured within half
+  an hour, each followed by data as if nothing had happened. One missed beat
+  therefore means nothing, which is why the connection is only doubted after
+  two.
 * The token is only checked when the connection is opened. Data kept coming
   an hour and 43 minutes after the token the socket was opened with had
   expired, so there is no reason to reconnect ahead of expiry.
@@ -45,8 +49,12 @@ from .const import APPSYNC_URL
 _LOGGER = logging.getLogger(__name__)
 
 # No frame at all for this long means the data is no longer trustworthy. The
-# keep-alive cadence is 60 s, so this is one missed beat plus a margin.
-SILENCE_DEGRADED = 90  # seconds
+# keep-alive cadence is 60 s, so this is two missed beats plus a margin: at
+# 90 s a single late beat was enough to declare the connection bad and drop
+# back to polling, six seconds before the next frame arrived, four times in
+# one night. Detecting a real outage a minute later costs nothing, because
+# polling covers the gap either way.
+SILENCE_DEGRADED = 150  # seconds
 
 # The server announces connectionTimeoutMs = 300000. Past that a connection
 # that has said nothing is dead however healthy the socket looks.
@@ -236,6 +244,12 @@ class RainBirdSubscription:
                         _LOGGER.debug(
                             "No frame for %ss; falling back to polling until it resumes",
                             int(silence),
+                        )
+                        # The silence is logged before the health change so a
+                        # noisy connection can be told apart from a dead one
+                        # without turning debug logging on.
+                        _LOGGER.info(
+                            "No data from Rain Bird for %ss", int(silence)
                         )
                         self._async_set_healthy(False)
                     continue
