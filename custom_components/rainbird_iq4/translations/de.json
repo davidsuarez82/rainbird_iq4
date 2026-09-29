@@ -39,14 +39,14 @@
         "title": "Rain Bird IQ4 – Optionen",
         "data": {
           "auth_channel": "Authentifizierungskanal",
-		  **"enable_realtime": "Live-Updates über den Echtzeit-Kanal von Rain Bird",**
+          "enable_realtime": "Live-Updates über den Echtzeit-Kanal von Rain Bird",
           "scan_interval": "Abfrageintervall für Echtzeitdaten (Sekunden)",
           "scan_interval_config": "Konfigurationsabfrageintervall des Controllers (Sekunden)",
           "scan_interval_program": "Abfrageintervall des Programms (Sekunden)"
         },
         "data_description": {
           "auth_channel": "So wird die Integration angemeldet. Belassen Sie die Einstellung bei den meisten Konten auf \"Webportal\". Wählen Sie \"Mobile App\" nur, wenn die Zonensteuerung mit einem Fehler 403 fehlschlägt (z. B. bei US-Konten mit kostenlosem Tarif). Durch diese Änderung wird die Integration neu geladen.",
-		  **"enable_realtime": "Wendet Statusänderungen an, sobald der Controller sie meldet, verzögert um etwa eine Sekunde, anstatt auf die nächste Abfrage zu warten. Nur MQTT-basierte Controller melden auf diese Weise; die Abfrage läuft in jedem Fall weiter. Deaktivieren Sie diese Option, wenn eine Firewall die Verbindung blockiert."**
+          "enable_realtime": "Wendet Statusänderungen an, sobald der Controller sie meldet, verzögert um etwa eine Sekunde, anstatt auf die nächste Abfrage zu warten. Nur MQTT-basierte Controller melden auf diese Weise; die Abfrage läuft in jedem Fall weiter. Deaktivieren Sie diese Option, wenn eine Firewall die Verbindung blockiert."
         }
       }
     }
