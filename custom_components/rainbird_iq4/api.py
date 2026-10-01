@@ -306,8 +306,21 @@ class RainBirdAPI:
             _LOGGER.debug("Could not parse AppSync state payload: %s", raw)
             return None
 
+    def get_access_token(self) -> str:
+        """Current access token, for callers that authenticate on their own.
+
+        The WebSocket subscription needs the raw token to open its connection;
+        everything else goes through _request or _graphql, which add it
+        themselves. Blocking: callers on the event loop must use an executor.
+        """
+        return self._auth.get_token()
+
     def get_device_info(self, satellite_id: int) -> dict:
-        """Return {"deviceUUID": str|None, "isMQTT": bool} for a satellite.
+        """Return {"deviceUUID", "ioTGatewayUUID", "isMQTT"} for a satellite.
+
+        ioTGatewayUUID identifies the LNK module rather than the controller,
+        and is the key the website subscribes with for the controller's own
+        online state.
 
         Cached — these are hardware properties, not state.
         """
@@ -317,7 +330,7 @@ class RainBirdAPI:
             if cached and now - cached[0] < self._DEVICE_INFO_CACHE_TTL:
                 return cached[1]
 
-        info = {"deviceUUID": None, "isMQTT": False}
+        info = {"deviceUUID": None, "ioTGatewayUUID": None, "isMQTT": False}
         try:
             match = next(
                 (s for s in self.get_satellite_list() if s.get("id") == satellite_id),
@@ -326,6 +339,7 @@ class RainBirdAPI:
             if match:
                 info = {
                     "deviceUUID": match.get("deviceUUID"),
+                    "ioTGatewayUUID": match.get("ioTGatewayUUID"),
                     "isMQTT": bool(match.get("isMQTT")),
                 }
         except Exception as err:

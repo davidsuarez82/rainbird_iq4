@@ -41,10 +41,12 @@
           "auth_channel": "Méthode d'authentification",
           "scan_interval": "Intervalle d'actualisation des données en temps réel (secondes)",
           "scan_interval_config": "Intervalle d'actualisation de la configuration du programmateur (secondes)",
-          "scan_interval_program": "Intervalle d'actualisation des programmes (secondes)"
+          "scan_interval_program": "Intervalle d'actualisation des programmes (secondes)",
+          "enable_realtime": "Mises à jour en direct via le canal temps réel de Rain Bird"
         },
         "data_description": {
-          "auth_channel": "Méthode utilisée par l'intégration pour se connecter. Conservez « Portail web » pour la plupart des comptes. Choisissez « Application mobile » uniquement si la commande des zones échoue avec une erreur 403 (par exemple avec les comptes gratuits aux États-Unis). La modification de cette option recharge l'intégration."
+          "auth_channel": "Méthode utilisée par l'intégration pour se connecter. Conservez « Portail web » pour la plupart des comptes. Choisissez « Application mobile » uniquement si la commande des zones échoue avec une erreur 403 (par exemple avec les comptes gratuits aux États-Unis). La modification de cette option recharge l'intégration.",
+          "enable_realtime": "Applique les changements d'état dès que le programmateur les signale, en une seconde environ, au lieu d'attendre la prochaine interrogation. Seuls les programmateurs MQTT fonctionnent ainsi, et l'interrogation périodique est maintenue dans tous les cas. Désactivez cette option si un pare-feu bloque la connexion."
         }
       }
     }

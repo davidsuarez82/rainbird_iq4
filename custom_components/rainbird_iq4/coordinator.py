@@ -68,6 +68,12 @@ APPSYNC_NEW_RUN_TOLERANCE = 10  # seconds
 # zone does not sit on "running" until the next poll.
 APPSYNC_END_PROBE_DELAY = APPSYNC_END_GRACE + 1  # seconds
 
+# Poll interval used while the live subscription is delivering. Polling is not
+# stopped: alarms, programs, rain delay, zone names and the event log have no
+# push equivalent, and it is also the safety net for a socket that goes quiet
+# without saying so.
+PUSH_SCAN_INTERVAL = 120  # seconds
+
 
 def _parse_event_timestamp(ts: str | None) -> datetime | None:
     """Parse a Rain Bird event-log timestamp into a naive datetime.
@@ -269,6 +275,11 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         self._probe_unsub = None
         self._probe_at: float | None = None
 
+        # Live subscription: while it is delivering, zone state is applied as
+        # it arrives and polling slows down to PUSH_SCAN_INTERVAL.
+        self._poll_interval = timedelta(seconds=scan_interval)
+        self._push_healthy = False
+
     def set_optimistic_running(self, station_id: int, duration_seconds: int) -> None:
         """Mark a station as running locally for duration_seconds.
 
@@ -370,6 +381,102 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         return running, ("R" if running else "-"), (ends_at if running else None)
 
     @callback
+    def async_set_push_healthy(self, healthy: bool) -> None:
+        """Follow the live connection's health.
+
+        A healthy socket delivers a change about a second after it happens, so
+        polling drops to PUSH_SCAN_INTERVAL; it never stops, because most of
+        what this integration reads has no push equivalent. Losing the socket
+        restores the configured interval and asks for data straight away,
+        since whatever was missed while it was quiet is still missing.
+        """
+        if healthy == self._push_healthy:
+            return
+        self._push_healthy = healthy
+        self.update_interval = (
+            timedelta(seconds=PUSH_SCAN_INTERVAL) if healthy else self._poll_interval
+        )
+        if healthy:
+            _LOGGER.info(
+                "Live updates active; polling every %ss", PUSH_SCAN_INTERVAL
+            )
+            return
+        _LOGGER.info(
+            "Live updates unavailable; polling every %ss",
+            int(self._poll_interval.total_seconds()),
+        )
+        self.hass.async_create_task(self.async_refresh())
+
+    @callback
+    def async_push_record(self, sk: str, data, timestamp: int | None, source: str) -> None:
+        """Apply one record pushed by the controller.
+
+        Only the records this integration already understands are used. The
+        rest, such as RSSI, are logged and ignored rather than guessed at.
+        """
+        if not self.data:
+            return
+        if sk.startswith("Station") and isinstance(data, dict):
+            terminal = sk[len("Station"):]
+            if terminal.isdigit():
+                self._async_push_station(int(terminal), data, timestamp)
+            return
+        if sk == self.api.SK_RAIN_SENSOR_STATE and isinstance(data, dict):
+            if data.get("state") is not None:
+                updated = dict(self.data)
+                updated["localSensor"] = {
+                    "state": data["state"], "timestamp": timestamp
+                }
+                self.async_set_updated_data(updated)
+            return
+        if sk == "DevicePresence" and isinstance(data, dict):
+            if data.get("isConnected") is not None:
+                updated = dict(self.data)
+                connection = dict(updated.get("connection", {}))
+                connection["isConnected"] = bool(data["isConnected"])
+                updated["connection"] = connection
+                self.async_set_updated_data(updated)
+            return
+        _LOGGER.debug("Ignoring live record %s (%s)", sk, data)
+
+    @callback
+    def _async_push_station(self, terminal: int, data: dict, timestamp: int | None) -> None:
+        """Apply a pushed station record to the zone on that terminal."""
+        stations = self.data.get("stations", [])
+        index = next(
+            (i for i, s in enumerate(stations) if s.get("terminal") == terminal), None
+        )
+        if index is None:
+            return
+
+        state = data.get("state")
+        remain = data.get("remainSec")
+        ends_at = None
+        if (
+            state == 1
+            and isinstance(timestamp, (int, float))
+            and isinstance(remain, (int, float))
+        ):
+            ends_at = int(timestamp + remain)
+
+        station = dict(stations[index])
+        is_running, status, run_ends_at = self._resolve_appsync_station(
+            station["id"], terminal, {"state": state, "endsAt": ends_at},
+            "P" if station.get("status") == "P" else "-",
+        )
+        station["status"] = status
+        station["isRunning"] = is_running
+        station["runEndsAt"] = run_ends_at
+        if not is_running:
+            station["remaining"] = None
+
+        updated = dict(self.data)
+        updated_stations = list(stations)
+        updated_stations[index] = station
+        updated["stations"] = updated_stations
+        self.async_set_updated_data(updated)
+
+    @callback
     def _async_schedule_probe(self, delay: float) -> None:
         """Ask for one extra refresh in `delay` seconds.
 
@@ -421,7 +528,14 @@ class RainBirdCoordinator(DataUpdateCoordinator):
         cycle. Whichever falls first is the one that gets scheduled.
         """
         if self._pending_starts or self._pending_stops:
-            self._async_schedule_probe(APPSYNC_RETRY_PROBE_DELAY)
+            # A healthy socket confirms a command in about a second, so the
+            # only refresh still worth booking is the one that runs when the
+            # override gives up, which is what logs a command the controller
+            # never carried out.
+            self._async_schedule_probe(
+                APPSYNC_CONFIRM_TIMEOUT + 2 if self._push_healthy
+                else APPSYNC_RETRY_PROBE_DELAY
+            )
 
         ends = [
             station["runEndsAt"]

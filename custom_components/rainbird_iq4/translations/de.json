@@ -1,0 +1,124 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Rain Bird IQ4",
+        "description": "Geben Sie Ihre Anmeldedaten für Ihr Rain Bird IQ4 Cloud-Konto ein.",
+        "data": {
+          "username": "E-Mail-Adresse oder Benutzername",
+          "password": "Kennwort",
+          "auth_channel": "Authentifizierungskanal"
+        },
+        "data_description": {
+          "username": "Falls die Anmeldung mit Ihrer E-Mail-Adresse aufgrund einer AWS-WAF-Abfrage (HTTP 202) fehlschlägt, versuchen Sie es stattdessen mit Ihrem Rain Bird-Kontonamen. Dabei handelt es sich um den bearbeitbaren Anzeigenamen, den Sie unter „Kontoeinstellungen“ auf der IQ4-Website finden (z. B. „Max Mustermann“) – nicht um die numerische „Konto-ID“, die in der mobilen App angezeigt wird und hier nicht funktioniert.",
+          "auth_channel": "So wird die Integration angemeldet. Belassen Sie bei den meisten Konten die Einstellung „Webportal“. Wählen Sie „Mobile App“ nur, wenn die Zonensteuerung mit einem Fehler 403 fehlschlägt (z. B. bei US-Konten mit kostenlosem Tarif)."
+        }
+      },
+      "select_controller": {
+        "title": "Controller auswählen",
+        "description": "Für dieses Konto wurden mehrere Controller gefunden. Wählen Sie den Controller aus, den Sie hinzufügen möchten.",
+        "data": {
+          "satellite_id": "Controller"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Anmeldung abgelehnt. Überprüfen Sie Ihren Benutzernamen und Ihr Passwort und versuchen Sie, sich unter https://iq4.rainbird.com anzumelden – möglicherweise muss das Passwort geändert oder neue Nutzungsbedingungen akzeptiert werden.",
+      "waf_challenge": "Der Bot-Schutz von Rain Bird hat die Anmeldung blockiert, bevor sie das Anmeldeformular erreicht hat. Dies ist kein Problem mit den Anmeldedaten und in der Regel nur vorübergehend – warten Sie bitte einige Minuten und versuchen Sie es dann erneut.",
+      "cannot_connect": "Die Verbindung konnte nicht hergestellt werden. Überprüfen Sie Ihre Anmeldedaten und Ihre Internetverbindung und versuchen Sie es dann erneut.",
+      "no_controllers": "Für dieses Konto wurden keine Controller gefunden.",
+      "unknown": "Es ist ein unerwarteter Fehler aufgetreten. Weitere Informationen finden Sie in den Protokollen."
+    },
+    "abort": {
+      "already_configured": "Dieser Controller ist bereits konfiguriert."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Rain Bird IQ4 – Optionen",
+        "data": {
+          "auth_channel": "Authentifizierungskanal",
+          "enable_realtime": "Live-Updates über den Echtzeit-Kanal von Rain Bird",
+          "scan_interval": "Abfrageintervall für Echtzeitdaten (Sekunden)",
+          "scan_interval_config": "Konfigurationsabfrageintervall des Controllers (Sekunden)",
+          "scan_interval_program": "Abfrageintervall des Programms (Sekunden)"
+        },
+        "data_description": {
+          "auth_channel": "So wird die Integration angemeldet. Belassen Sie die Einstellung bei den meisten Konten auf \"Webportal\". Wählen Sie \"Mobile App\" nur, wenn die Zonensteuerung mit einem Fehler 403 fehlschlägt (z. B. bei US-Konten mit kostenlosem Tarif). Durch diese Änderung wird die Integration neu geladen.",
+          "enable_realtime": "Wendet Statusänderungen an, sobald der Controller sie meldet, verzögert um etwa eine Sekunde, anstatt auf die nächste Abfrage zu warten. Nur MQTT-basierte Controller melden auf diese Weise; die Abfrage läuft in jedem Fall weiter. Deaktivieren Sie diese Option, wenn eine Firewall die Verbindung blockiert."
+        }
+      }
+    }
+  },
+  "selector": {
+    "auth_channel": {
+      "options": {
+        "web": "Webportal (Standard) – funktioniert für die meisten Konten",
+        "app": "Mobile App – zu verwenden, wenn die Zonensteuerung mit dem Fehler 403 fehlschlägt (z. B. kostenlose Tarife in den USA)"
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "alarms": {
+        "name": "Alarme"
+      },
+      "warnings": {
+        "name": "Warnungen"
+      },
+      "rain_delay": {
+        "name": "Regenunterbrechung"
+      },
+      "controller_mode": {
+        "name": "Controller Modus",
+        "state": {
+          "off": "Aus",
+          "auto": "Auto"
+        }
+      },
+      "station": {
+        "state": {
+          "idle": "Leerlauf",
+          "running": "Aktiv",
+          "paused": "Pausiert"
+        }
+      },
+      "program_status": {
+        "name": "Programm {program} Status",
+        "state": {
+          "scheduled": "Geplant",
+          "not_scheduled": "Nicht geplant",
+          "disabled": "Deaktiviert"
+        }
+      }
+    },
+    "binary_sensor": {
+      "connected": {
+        "name": "Verbunden"
+      },
+      "any_zone_running": {
+        "name": "Eine Zone aktiv"
+      },
+      "forecast_rain_delay": {
+        "name": "Forecast Regenunterbrechung"
+      },
+      "local_sensor": {
+        "name": "Lokaler Sensor"
+      },
+      "rain_sensor": {
+        "name": "Regensensor"
+      }
+    },
+    "button": {
+      "refresh": {
+        "name": "Aktualisieren"
+      }
+    },
+    "calendar": {
+      "program_schedule": {
+        "name": "Programmplanung {program}"
+      }
+    }
+  }
+}

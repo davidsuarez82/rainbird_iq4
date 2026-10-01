@@ -27,8 +27,10 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL_CONFIG,
     CONF_SCAN_INTERVAL_PROGRAM,
+    CONF_ENABLE_REALTIME,
     CONF_USERNAME,
     DEFAULT_AUTH_CHANNEL,
+    DEFAULT_ENABLE_REALTIME,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL_CONFIG,
     DEFAULT_SCAN_INTERVAL_PROGRAM,
@@ -202,6 +204,9 @@ class RainBirdOptionsFlow(config_entries.OptionsFlow):
         )
         # Channel may have been set at install time (entry.data) and possibly
         # overridden later (entry.options). Options take precedence.
+        current_push = self._config_entry.options.get(
+            CONF_ENABLE_REALTIME, DEFAULT_ENABLE_REALTIME
+        )
         current_channel = self._config_entry.options.get(
             CONF_AUTH_CHANNEL,
             self._config_entry.data.get(CONF_AUTH_CHANNEL, DEFAULT_AUTH_CHANNEL),
@@ -213,6 +218,7 @@ class RainBirdOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_AUTH_CHANNEL, default=current_channel
                 ): _channel_selector(),
+                vol.Optional(CONF_ENABLE_REALTIME, default=current_push): bool,
                 vol.Optional(CONF_SCAN_INTERVAL, default=current_realtime): vol.All(
                     int, vol.Range(min=10, max=300)
                 ),

@@ -17,6 +17,7 @@ from homeassistant.loader import async_get_integration
 
 from .api import RainBirdAPI
 from .auth import RainBirdAuth
+from .subscription import RainBirdSubscription
 from .const import (
     CONF_AUTH_CHANNEL,
     CONF_COMPANY_ID,
@@ -25,6 +26,8 @@ from .const import (
     CONF_SCAN_INTERVAL,
     CONF_SCAN_INTERVAL_CONFIG,
     CONF_SCAN_INTERVAL_PROGRAM,
+    CONF_ENABLE_REALTIME,
+    DEFAULT_ENABLE_REALTIME,
     CONF_USERNAME,
     DEFAULT_AUTH_CHANNEL,
     DEFAULT_SCAN_INTERVAL,
@@ -355,6 +358,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     satellite_id = entry.data[CONF_SATELLITE_ID]
     company_id   = entry.data[CONF_COMPANY_ID]
 
+    enable_realtime = entry.options.get(CONF_ENABLE_REALTIME, DEFAULT_ENABLE_REALTIME)
     scan_realtime = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
     scan_config   = entry.options.get(CONF_SCAN_INTERVAL_CONFIG, DEFAULT_SCAN_INTERVAL_CONFIG)
     scan_program  = entry.options.get(CONF_SCAN_INTERVAL_PROGRAM, DEFAULT_SCAN_INTERVAL_PROGRAM)
@@ -380,11 +384,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception as err:
         raise ConfigEntryNotReady(f"Unable to connect to Rain Bird: {err}") from err
 
+    subscription = None
+    if enable_realtime:
+        # Live state over the AppSync WebSocket. Failing to start is not fatal:
+        # everything keeps working on polling alone, which is also what happens
+        # on controllers that do not report over MQTT.
+        subscription = RainBirdSubscription(
+            hass, api, satellite_id,
+            coordinator.async_push_record,
+            coordinator.async_set_push_healthy,
+        )
+        if not await subscription.async_start():
+            subscription = None
+
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "realtime": coordinator,
         "config":   config_coordinator,
         "program":  program_coordinator,
         "api":      api,
+        "subscription": subscription,
     }
 
     await _async_register_frontend(hass)
@@ -409,6 +427,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Drop the realtime coordinator's pending confirmation refresh, so a
         # reload does not leave a timer firing against a dead coordinator.
         entry_data["realtime"].async_cancel_probe()
+        subscription = entry_data.get("subscription")
+        if subscription:
+            await subscription.async_stop()
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         coordinators = hass.data[DOMAIN].pop(entry.entry_id)
